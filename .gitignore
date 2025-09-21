@@ -1,7 +1,10 @@
 # Data and results directories
 data/
 results/
+models/sam
 
+# Model files (large binaries)
+*.pt
 # Python
 __pycache__/
 *.py[cod]

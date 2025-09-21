@@ -1,0 +1,46 @@
+{
+  "detector": {
+    "backend": "yolov8",
+    "model_name": "yolov8x-seg.pt",
+    "score_threshold": 0.25,
+    "iou_threshold": 0.5,
+    "max_detections": 100,
+    "device": null,
+    "imgsz": 1536,
+    "retina_masks": true,
+    "augment": true,
+    "tta_imgsz": [1024, 1280, 1536],
+    "refine_masks": true,
+    "refine_method": "sam",
+    "morph_kernel": 3,
+    "morph_iters": 1,
+    "sam_checkpoint": "models/sam/sam_vit_b_01ec64.pth",
+    "sam_model_type": "vit_b",
+    "fusion_method": "soft_nms",
+    "soft_nms_sigma": 0.5
+  },
+  "classifier": {
+    "backend": "clip_zeroshot",
+    "device": null,
+    "labels_path": "food_analyzer/ingredients_labels.json"
+  },
+  "volume": {
+    "grams_for_full_plate": 300.0
+  },
+  "nutrition": {
+    "table_path": null
+  },
+  "depth": {
+    "enabled": true
+  },
+  "pipeline": {
+    "use_detector_labels": false
+  },
+  "io": {
+    "image_extensions": [".jpg", ".jpeg", ".png", ".bmp", ".gif"],
+    "results_dir": "results",
+    "save_overlays": true,
+    "save_crops": true,
+    "save_masks": true
+  }
+}
