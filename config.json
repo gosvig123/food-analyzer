@@ -1,7 +1,7 @@
 {
   "detector": {
-    "backend": "yolov8",
-    "model_name": "yolov8x-seg.pt",
+    "backend": "mask_rcnn_deeplabv3",
+    "model_name": null,
     "score_threshold": 0.25,
     "iou_threshold": 0.5,
     "max_detections": 100,
