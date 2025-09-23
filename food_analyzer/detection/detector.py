@@ -80,21 +80,7 @@ class FoodDetector:
         self.soft_nms_sigma = float(max(1e-6, soft_nms_sigma))
 
         try:
-            if backend == "yolov8":
-                try:
-                    from ultralytics import YOLO  # type: ignore
-                except Exception as exc:  # pragma: no cover - optional dependency
-                    raise RuntimeError(f"ultralytics not available: {exc}")
-                yolo_model = model_name or "yolov8x-seg.pt"
-                self.model = YOLO(yolo_model)
-                names = getattr(self.model, "names", None)
-                if isinstance(names, dict):
-                    self.categories = [names[i] for i in sorted(names.keys())]
-                elif isinstance(names, list):
-                    self.categories = names
-                else:
-                    self.categories = ["food"]
-            elif backend == "mask_rcnn_deeplabv3":
+            if backend == "mask_rcnn_deeplabv3":
                 # Load Mask R-CNN for instance segmentation
                 mask_weights = detection_models.MaskRCNN_ResNet50_FPN_V2_Weights.DEFAULT
                 self.model = detection_models.maskrcnn_resnet50_fpn_v2(
@@ -255,111 +241,143 @@ class FoodDetector:
         if not contours:
             return []
         cnt = max(contours, key=cv2.contourArea)
-        # High-precision polygon extraction
+        # High-precision polygon extraction with adaptive approximation
         peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.002 * max(1.0, peri), True)
+        # Use adaptive epsilon based on contour complexity
+        epsilon = 0.001 * max(1.0, peri) if len(cnt) > 500 else 0.002 * max(1.0, peri)
+        approx = cv2.approxPolyDP(cnt, epsilon, True)
         poly = [(float(p[0][0]), float(p[0][1])) for p in approx]
-        # Reduce polygon complexity while preserving accuracy
-        step = max(1, int(len(poly) / 200))
+        # Preserve more detail for smaller objects
+        max_points = min(300, max(50, int(peri / 10)))
+        step = max(1, int(len(poly) / max_points))
         return poly[::step]
 
     def _inference_mask_rcnn_deeplabv3(self, image: Image.Image) -> List[Detection]:
         """Inference using Mask R-CNN + DeepLabV3+ hybrid approach for better recall."""
-        # Instance segmentation with Mask R-CNN
-        tensor = self.preprocess(image).to(self.device)
+        # Multi-scale inference for better detection of various food sizes
+        scales = [1.0]
+        if self.tta_imgsz and self.augment:
+            original_size = min(image.size)
+            for target_size in self.tta_imgsz:
+                if target_size != original_size:
+                    scales.append(target_size / original_size)
 
-        with torch.no_grad():
-            outputs = self.model([tensor])[0]
+        all_instance_detections = []
+        all_instance_masks = []
 
-        # Extract instance masks
-        instance_masks = []
-        instance_detections = []
+        for scale in scales:
+            if scale != 1.0:
+                scaled_size = (int(image.size[0] * scale), int(image.size[1] * scale))
+                scaled_image = image.resize(scaled_size, Image.Resampling.LANCZOS)
+            else:
+                scaled_image = image
 
-        for score, label_idx, box, mask in zip(
-            outputs.get("scores", []).cpu().numpy(),
-            outputs.get("labels", []).cpu().numpy(),
-            outputs.get("boxes", []).cpu().numpy(),
-            outputs.get("masks", []).cpu().numpy(),
-        ):
-            if score < self.score_threshold:
-                continue
+            # Instance segmentation with Mask R-CNN
+            tensor = self.preprocess(scaled_image).to(self.device)
 
-            left, top, right, bottom = (int(round(v)) for v in box)
-            category = (
-                self.categories[label_idx]
-                if 0 <= label_idx < len(self.categories)
-                else "food"
-            )
+            with torch.no_grad():
+                outputs = self.model([tensor])[0]
 
-            # Convert mask to binary and extract polygon
-            mask_binary = (mask[0] > 0.5).astype(np.uint8) * 255
-            instance_masks.append(mask_binary)
+            # Extract instance masks for this scale
+            scale_instance_masks = []
+            scale_instance_detections = []
 
-            mask_polygon = self._mask_to_polygon(mask_binary)
-            if mask_polygon and self.refine_masks:
-                try:
-                    mask_polygon = self._refine_polygon(image, mask_polygon)
-                except Exception:
-                    pass
+            for score, label_idx, box, mask in zip(
+                outputs.get("scores", []).cpu().numpy(),
+                outputs.get("labels", []).cpu().numpy(),
+                outputs.get("boxes", []).cpu().numpy(),
+                outputs.get("masks", []).cpu().numpy(),
+            ):
+                if score < self.score_threshold:
+                    continue
 
-            instance_detections.append(
-                Detection(
-                    box=(left, top, right, bottom),
-                    confidence=float(score),
-                    label=category,
-                    mask_polygon=mask_polygon,
+                # Scale coordinates back to original image size
+                if scale != 1.0:
+                    left, top, right, bottom = [int(round(v / scale)) for v in box]
+                else:
+                    left, top, right, bottom = (int(round(v)) for v in box)
+
+                category = (
+                    self.categories[label_idx]
+                    if 0 <= label_idx < len(self.categories)
+                    else "food"
                 )
-            )
+
+                # Convert mask to binary and scale back if needed
+                mask_binary = (mask[0] > 0.5).astype(np.uint8) * 255
+                if scale != 1.0:
+                    mask_binary = np.array(
+                        Image.fromarray(mask_binary).resize(
+                            image.size, Image.Resampling.NEAREST
+                        )
+                    )
+
+                scale_instance_masks.append(mask_binary)
+
+                mask_polygon = self._mask_to_polygon(mask_binary)
+                if mask_polygon and self.refine_masks:
+                    try:
+                        mask_polygon = self._refine_polygon(image, mask_polygon)
+                    except Exception:
+                        pass
+
+                scale_instance_detections.append(
+                    Detection(
+                        box=(left, top, right, bottom),
+                        confidence=float(score),
+                        label=category,
+                        mask_polygon=mask_polygon,
+                    )
+                )
+
+            all_instance_detections.extend(scale_instance_detections)
+            all_instance_masks.extend(scale_instance_masks)
+
+        # Merge multi-scale detections
+        instance_detections = all_instance_detections
+        instance_masks = all_instance_masks
 
         # Semantic segmentation with DeepLabV3+
         semantic_masks = self._semantic_segmentation_to_masks(image)
 
-        # Process additional semantic masks that weren't covered by instance segmentation
+        # Process all semantic masks without overlap filtering
         additional_detections = []
         for sem_mask in semantic_masks:
-            # Check if this semantic mask adds new information
-            has_instance_coverage = False
-            for inst_mask in instance_masks:
-                if inst_mask.shape != sem_mask.shape:
-                    continue
-                overlap = np.logical_and(inst_mask > 0, sem_mask > 0).sum()
-                if overlap > (sem_mask > 0).sum() * 0.4:  # 40% covered by instance
-                    has_instance_coverage = True
-                    break
+            # Create detection from semantic mask
+            if cv2 is not None:
+                contours, _ = cv2.findContours(
+                    sem_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                if contours:
+                    largest_contour = max(contours, key=cv2.contourArea)
+                    x, y, w, h = cv2.boundingRect(largest_contour)
 
-            if not has_instance_coverage:
-                # Create detection from semantic mask
-                if cv2 is not None:
-                    contours, _ = cv2.findContours(
-                        sem_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                    )
-                    if contours:
-                        largest_contour = max(contours, key=cv2.contourArea)
-                        x, y, w, h = cv2.boundingRect(largest_contour)
+                    mask_polygon = self._mask_to_polygon(sem_mask)
+                    if mask_polygon and self.refine_masks:
+                        try:
+                            mask_polygon = self._refine_polygon(image, mask_polygon)
+                        except Exception:
+                            pass
 
-                        mask_polygon = self._mask_to_polygon(sem_mask)
-                        if mask_polygon and self.refine_masks:
-                            try:
-                                mask_polygon = self._refine_polygon(image, mask_polygon)
-                            except Exception:
-                                pass
+                    # Dynamic confidence based on semantic mask quality
+                    mask_area = cv2.contourArea(largest_contour)
+                    total_area = sem_mask.shape[0] * sem_mask.shape[1]
+                    area_ratio = mask_area / total_area
+                    confidence = min(0.8, max(0.4, 0.5 + area_ratio))
 
-                        additional_detections.append(
-                            Detection(
-                                box=(x, y, x + w, y + h),
-                                confidence=0.6,  # Lower confidence for semantic-only detections
-                                label="food",
-                                mask_polygon=mask_polygon,
-                            )
+                    additional_detections.append(
+                        Detection(
+                            box=(x, y, x + w, y + h),
+                            confidence=confidence,
+                            label="food",
+                            mask_polygon=mask_polygon,
                         )
+                    )
 
-        # Combine all detections
+        # Combine all detections without NMS filtering
         all_detections = instance_detections + additional_detections
 
-        # Apply NMS to remove overlapping detections
-        if len(all_detections) > 1:
-            all_detections = self._apply_nms(all_detections)
-
+        # Return all detections without overlap filtering
         return all_detections[: self.max_detections]
 
     def _apply_nms(self, detections: List[Detection]) -> List[Detection]:
@@ -400,97 +418,6 @@ class FoodDetector:
         # Handle Mask R-CNN + DeepLabV3+ hybrid backend for maximum recall
         if self.model is not None and self.backend == "mask_rcnn_deeplabv3":
             return self._inference_mask_rcnn_deeplabv3(image)
-
-        if self.model is not None and self.backend == "yolov8":
-            try:
-                # Optimized parameters for highest accuracy
-                yargs = dict(
-                    verbose=False,
-                    conf=float(self.score_threshold),
-                    iou=float(self.iou_threshold),
-                    max_det=int(self.max_detections),
-                    retina_masks=self.retina_masks,
-                    augment=self.augment,
-                    half=False,  # Use full precision for accuracy
-                    device=self.device,
-                )
-                if self.imgsz:
-                    yargs["imgsz"] = int(self.imgsz)
-                results = self.model(image, **yargs)
-            except Exception as exc:  # pragma: no cover - runtime safeguard
-                warnings.warn(f"YOLOv8 inference failed: {exc}")
-                return []
-
-            def parse_results(rs) -> List[Detection]:
-                parsed: List[Detection] = []
-                for r in rs:
-                    boxes = getattr(r, "boxes", None)
-                    if boxes is None:
-                        continue
-                    try:
-                        xyxy = boxes.xyxy.cpu().numpy()
-                        confs = boxes.conf.cpu().numpy()
-                        clss = boxes.cls.cpu().numpy().astype(int)
-                    except Exception:
-                        continue
-                    masks = getattr(r, "masks", None)
-                    masks_xy = getattr(masks, "xy", None) if masks is not None else None
-                    for idx, ((left, top, right, bottom), score, cls_id) in enumerate(
-                        zip(xyxy, confs, clss)
-                    ):
-                        if float(score) < float(self.score_threshold):
-                            continue
-                        label = (
-                            self.categories[cls_id]
-                            if 0 <= cls_id < len(self.categories)
-                            else "food"
-                        )
-                        mask_polygon = None
-                        if masks_xy is not None and idx < len(masks_xy):
-                            try:
-                                poly = masks_xy[idx]
-                                # Downsample very long polygons to keep JSON small
-                                step = max(1, int(len(poly) / 300))
-                                mask_polygon = [
-                                    (float(x), float(y)) for x, y in poly[::step]
-                                ]
-                            except Exception:
-                                mask_polygon = None
-                        # Optional mask refinement
-                        if mask_polygon and self.refine_masks:
-                            try:
-                                mask_polygon = self._refine_polygon(image, mask_polygon)
-                            except Exception:
-                                pass
-                        parsed.append(
-                            Detection(
-                                box=(
-                                    int(round(left)),
-                                    int(round(top)),
-                                    int(round(right)),
-                                    int(round(bottom)),
-                                ),
-                                confidence=float(score),
-                                label=label,
-                                mask_polygon=mask_polygon,
-                            )
-                        )
-                return parsed
-
-            detections: List[Detection] = parse_results(results)
-
-            # Apply mask refinement if enabled
-            if detections and self.refine_masks:
-                for detection in detections:
-                    if detection.mask_polygon:
-                        try:
-                            detection.mask_polygon = self._refine_polygon(
-                                image, detection.mask_polygon
-                            )
-                        except Exception:
-                            pass
-
-            return detections
 
         # No fallback - fail gracefully if model not available
         return []
