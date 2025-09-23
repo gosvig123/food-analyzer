@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Set
 
-from .ingredient_config import IngredientConfig, load_ingredient_config
+from ..data.ingredient_config import IngredientConfig, load_ingredient_config
 
 
 class IngredientLabelFetcher:

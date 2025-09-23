@@ -5,14 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from PIL import Image, UnidentifiedImageError, ImageDraw
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
-from .classifier import FoodClassifier
-from .depth import DepthEstimator
-from .detector import FoodDetector
-from .nutrition import NutritionLookup
+from ..classification.classifier import FoodClassifier
+from ..detection.depth import DepthEstimator
+from ..detection.detector import FoodDetector
+from ..nutrition.lookup import NutritionLookup
+from ..nutrition.volume import VolumeEstimator
 from .types import AnalyzedFood, Detection, ImageInput
-from .volume import VolumeEstimator
 
 
 class FoodInferencePipeline:
@@ -56,7 +56,8 @@ class FoodInferencePipeline:
                     poly_pts = [(int(x), int(y)) for x, y in detection.mask_polygon]
                     draw.polygon(poly_pts, fill=255)
                     # Compute tight bounding box around polygon with a small padding
-                    xs = [x for x, _ in poly_pts]; ys = [y for _, y in poly_pts]
+                    xs = [x for x, _ in poly_pts]
+                    ys = [y for _, y in poly_pts]
                     pad = 4
                     left = max(min(xs) - pad, 0)
                     top = max(min(ys) - pad, 0)
@@ -68,7 +69,10 @@ class FoodInferencePipeline:
                 except Exception:
                     pass
             if self.use_detector_labels:
-                classification = {"label": detection.label, "confidence": detection.confidence}
+                classification = {
+                    "label": detection.label,
+                    "confidence": detection.confidence,
+                }
             else:
                 classification = self.classifier(crop)
             grams = self.volume_estimator(

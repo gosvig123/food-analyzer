@@ -10,7 +10,7 @@ from typing import Dict
 def load_default_nutrition_table() -> Dict[str, Dict[str, float]]:
     """Load the default nutrition table shipped with the package."""
 
-    path = Path(__file__).with_name("nutrition_defaults.json")
+    path = Path(__file__).with_name("defaults.json")
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 

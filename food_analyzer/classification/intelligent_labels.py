@@ -7,7 +7,7 @@ import warnings
 from functools import lru_cache
 from typing import List, Optional, Set
 
-from .ingredient_config import IngredientConfig, load_ingredient_config
+from ..data.ingredient_config import IngredientConfig, load_ingredient_config
 
 
 class IntelligentLabelExtractor:

@@ -11,13 +11,13 @@ from typing import Iterable, List, Set
 
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
-from food_analyzer.classifier import FoodClassifier
-from food_analyzer.config import load_config, resolve_path_relative_to_project
-from food_analyzer.depth import DepthEstimator
-from food_analyzer.detector import FoodDetector
-from food_analyzer.nutrition import NutritionLookup
-from food_analyzer.pipeline import FoodInferencePipeline
-from food_analyzer.volume import VolumeEstimator
+from food_analyzer.classification.classifier import FoodClassifier
+from food_analyzer.core.pipeline import FoodInferencePipeline
+from food_analyzer.detection.depth import DepthEstimator
+from food_analyzer.detection.detector import FoodDetector
+from food_analyzer.nutrition.lookup import NutritionLookup
+from food_analyzer.nutrition.volume import VolumeEstimator
+from food_analyzer.utils.config import load_config, resolve_path_relative_to_project
 
 
 def iter_image_paths(directory: Path, extensions: Set[str]) -> Iterable[Path]:

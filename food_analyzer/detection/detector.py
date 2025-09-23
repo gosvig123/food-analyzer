@@ -7,7 +7,6 @@ from typing import List
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
 from torchvision.models import detection as detection_models
@@ -23,7 +22,7 @@ except Exception:  # pragma: no cover - optional
     sam_model_registry = None
     SamPredictor = None
 
-from .types import Detection
+from ..core.types import Detection
 
 
 class FoodDetector:
