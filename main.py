@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import sys
 import argparse
+import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable, List, Set
-import json
 
-from PIL import UnidentifiedImageError, Image, ImageDraw
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from food_analyzer.classifier import FoodClassifier
 from food_analyzer.config import load_config, resolve_path_relative_to_project
@@ -50,7 +50,9 @@ def aggregate_results(results: List[dict]) -> List[dict]:
         entry["count"] += 1
         entry["grams"] += float(item["portion_grams"])
         entry["calories"] += float(item["nutrition"].get("calories", 0.0))
-        entry["max_confidence"] = max(entry["max_confidence"], float(item["confidence"]))
+        entry["max_confidence"] = max(
+            entry["max_confidence"], float(item["confidence"])
+        )
     ordered = sorted(
         (
             {
@@ -75,7 +77,13 @@ def format_aggregate_row(entry: dict) -> str:
     )
 
 
-def write_results(results_dir: Path, image_path: Path, detections: List[dict], aggregates: List[dict], totals: dict) -> None:
+def write_results(
+    results_dir: Path,
+    image_path: Path,
+    detections: List[dict],
+    aggregates: List[dict],
+    totals: dict,
+) -> None:
     results_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "image": str(image_path),
@@ -89,8 +97,14 @@ def write_results(results_dir: Path, image_path: Path, detections: List[dict], a
         json.dump(payload, handle, indent=2)
 
 
-
-def save_visuals(results_dir: Path, image_path: Path, detections: List[dict], save_overlays: bool, save_crops: bool, save_masks: bool) -> None:
+def save_visuals(
+    results_dir: Path,
+    image_path: Path,
+    detections: List[dict],
+    save_overlays: bool,
+    save_crops: bool,
+    save_masks: bool,
+) -> None:
     if not (save_overlays or save_crops):
         return
     try:
@@ -113,17 +127,26 @@ def save_visuals(results_dir: Path, image_path: Path, detections: List[dict], sa
             if isinstance(mask_poly, list) and len(mask_poly) >= 3:
                 try:
                     poly_pts = [(int(x), int(y)) for x, y in mask_poly]
-                    draw.polygon(poly_pts, fill=(255, 0, 0, 80), outline=(255, 0, 0, 180))
+                    draw.polygon(
+                        poly_pts, fill=(255, 0, 0, 80), outline=(255, 0, 0, 180)
+                    )
                 except Exception:
                     pass
             # Draw bounding box + label
             if box and len(box) == 4:
                 left, top, right, bottom = [int(v) for v in box]
-                draw.rectangle([(left, top), (right, bottom)], outline=(255, 0, 0, 220), width=3)
+                draw.rectangle(
+                    [(left, top), (right, bottom)], outline=(255, 0, 0, 220), width=3
+                )
                 txt = f"{label} {conf:.2f}"
-                tw, th = ImageDraw.Draw(Image.new("RGB", (1,1))).textlength(txt), 12
-                draw.rectangle([(left, max(0, top - th - 4)), (left + int(tw) + 6, top)], fill=(255, 0, 0, 220))
-                draw.text((left + 3, max(0, top - th - 2)), txt, fill=(255, 255, 255, 255))
+                tw, th = ImageDraw.Draw(Image.new("RGB", (1, 1))).textlength(txt), 12
+                draw.rectangle(
+                    [(left, max(0, top - th - 4)), (left + int(tw) + 6, top)],
+                    fill=(255, 0, 0, 220),
+                )
+                draw.text(
+                    (left + 3, max(0, top - th - 2)), txt, fill=(255, 255, 255, 255)
+                )
         composed = Image.alpha_composite(base, overlay)
         composed.save(overlays_dir / f"{image_path.stem}_overlay.png")
 
@@ -142,7 +165,8 @@ def save_visuals(results_dir: Path, image_path: Path, detections: List[dict], sa
             mask_crop = None
             if isinstance(mask_poly, list) and len(mask_poly) >= 3:
                 try:
-                    xs = [int(x) for x, _ in mask_poly]; ys = [int(y) for _, y in mask_poly]
+                    xs = [int(x) for x, _ in mask_poly]
+                    ys = [int(y) for _, y in mask_poly]
                     pad = 4
                     left = max(min(xs) - pad, 0)
                     top = max(min(ys) - pad, 0)
@@ -157,22 +181,41 @@ def save_visuals(results_dir: Path, image_path: Path, detections: List[dict], sa
             # Save both variants
             (crops_dir / "bbox").mkdir(parents=True, exist_ok=True)
             (crops_dir / "mask").mkdir(parents=True, exist_ok=True)
-            primary_crop.save(crops_dir / f"{image_path.stem}_{idx:02d}_{safe_label}.jpg")
-            bbox_crop.save(crops_dir / "bbox" / f"{image_path.stem}_{idx:02d}_{safe_label}_bbox.jpg")
-            (mask_crop if mask_crop is not None else bbox_crop).save(crops_dir / "mask" / f"{image_path.stem}_{idx:02d}_{safe_label}_mask.jpg")
+            primary_crop.save(
+                crops_dir / f"{image_path.stem}_{idx:02d}_{safe_label}.jpg"
+            )
+            bbox_crop.save(
+                crops_dir
+                / "bbox"
+                / f"{image_path.stem}_{idx:02d}_{safe_label}_bbox.jpg"
+            )
+            (mask_crop if mask_crop is not None else bbox_crop).save(
+                crops_dir
+                / "mask"
+                / f"{image_path.stem}_{idx:02d}_{safe_label}_mask.jpg"
+            )
             # Montage (side-by-side bbox vs mask-tight)
             try:
-                left_img, right_img = bbox_crop, (mask_crop if mask_crop is not None else bbox_crop)
+                left_img, right_img = (
+                    bbox_crop,
+                    (mask_crop if mask_crop is not None else bbox_crop),
+                )
                 h = max(left_img.height, right_img.height)
                 new_left = Image.new("RGB", (left_img.width, h), (255, 255, 255))
                 new_left.paste(left_img, (0, 0))
                 new_right = Image.new("RGB", (right_img.width, h), (255, 255, 255))
                 new_right.paste(right_img, (0, 0))
-                montage = Image.new("RGB", (new_left.width + new_right.width, h), (255, 255, 255))
+                montage = Image.new(
+                    "RGB", (new_left.width + new_right.width, h), (255, 255, 255)
+                )
                 montage.paste(new_left, (0, 0))
                 montage.paste(new_right, (new_left.width, 0))
                 (crops_dir / "montage").mkdir(parents=True, exist_ok=True)
-                montage.save(crops_dir / "montage" / f"{image_path.stem}_{idx:02d}_{safe_label}_montage.jpg")
+                montage.save(
+                    crops_dir
+                    / "montage"
+                    / f"{image_path.stem}_{idx:02d}_{safe_label}_montage.jpg"
+                )
             except Exception:
                 pass
 
@@ -189,7 +232,9 @@ def save_visuals(results_dir: Path, image_path: Path, detections: List[dict], sa
                 poly_pts = [(int(x), int(y)) for x, y in mask_poly]
                 mdraw.polygon(poly_pts, fill=255)
                 label = str(det.get("label", "item")).replace(" ", "_")
-                mask_img.save(masks_dir / f"{image_path.stem}_{idx:02d}_{label}_mask.png")
+                mask_img.save(
+                    masks_dir / f"{image_path.stem}_{idx:02d}_{label}_mask.png"
+                )
             except Exception:
                 continue
 
@@ -197,29 +242,30 @@ def save_visuals(results_dir: Path, image_path: Path, detections: List[dict], sa
 def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
     # Nutrition table
     table_path_str = cfg.get("nutrition", {}).get("table_path")
-    table_path = resolve_path_relative_to_project(table_path_str) if table_path_str else None
+    table_path = (
+        resolve_path_relative_to_project(table_path_str) if table_path_str else None
+    )
     nutrition_lookup = NutritionLookup(table=None, table_path=table_path)
-
-    # Classifier fallback labels derived from nutrition table keys
-    fallback_labels = list(nutrition_lookup.table.keys()) if hasattr(nutrition_lookup, "table") else None
 
     # Components
     detector_cfg = cfg.get("detector", {})
     detector = FoodDetector(
-        score_threshold=float(detector_cfg.get("score_threshold", 0.5)),
+        score_threshold=float(detector_cfg.get("score_threshold", 0.25)),
         iou_threshold=float(detector_cfg.get("iou_threshold", 0.45)),
         max_detections=int(detector_cfg.get("max_detections", 100)),
         device=detector_cfg.get("device"),
-        backend=str(detector_cfg.get("backend", "torchvision_fasterrcnn")),
+        backend=str(detector_cfg.get("backend", "mask_rcnn_deeplabv3")),
         model_name=detector_cfg.get("model_name") or None,
-        imgsz=int(detector_cfg.get("imgsz")) if detector_cfg.get("imgsz") is not None else None,
+        imgsz=int(detector_cfg.get("imgsz"))
+        if detector_cfg.get("imgsz") is not None
+        else None,
         retina_masks=bool(detector_cfg.get("retina_masks", True)),
         augment=bool(detector_cfg.get("augment", False)),
         tta_imgsz=detector_cfg.get("tta_imgsz") or None,
         refine_masks=bool(detector_cfg.get("refine_masks", True)),
-        refine_method=str(detector_cfg.get("refine_method", "morphology")),
-        morph_kernel=int(detector_cfg.get("morph_kernel", 3)),
-        morph_iters=int(detector_cfg.get("morph_iters", 1)),
+        refine_method=str(detector_cfg.get("refine_method", "sam")),
+        morph_kernel=int(detector_cfg.get("morph_kernel", 5)),
+        morph_iters=int(detector_cfg.get("morph_iters", 2)),
         sam_checkpoint=detector_cfg.get("sam_checkpoint"),
         sam_model_type=detector_cfg.get("sam_model_type"),
         fusion_method=str(detector_cfg.get("fusion_method", "soft_nms")),
@@ -227,19 +273,19 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
     )
 
     classifier_cfg = cfg.get("classifier", {})
-    labels_path = classifier_cfg.get("labels_path")
-    resolved_labels_path = (
-        resolve_path_relative_to_project(labels_path) if labels_path is not None else None
-    )
+    dynamic_labels_source = classifier_cfg.get("dynamic_labels_source")
+    intelligent_labels_method = classifier_cfg.get("intelligent_labels_method")
     classifier = FoodClassifier(
         device=classifier_cfg.get("device"),
-        fallback_labels=fallback_labels,
         backend=str(classifier_cfg.get("backend", "efficientnet_b0")),
-        labels_path=resolved_labels_path,
+        dynamic_labels_source=dynamic_labels_source,
+        intelligent_labels_method=intelligent_labels_method,
     )
 
     volume_estimator = VolumeEstimator(
-        grams_for_full_plate=float(cfg.get("volume", {}).get("grams_for_full_plate", 300.0))
+        grams_for_full_plate=float(
+            cfg.get("volume", {}).get("grams_for_full_plate", 300.0)
+        )
     )
 
     depth_enabled = bool(cfg.get("depth", {}).get("enabled", True))
@@ -259,7 +305,10 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
 def run_inference(target_dir: Path, cfg: dict) -> None:
     pipeline = build_pipeline_from_config(cfg)
 
-    exts = {e.lower() for e in cfg.get("io", {}).get("image_extensions", [".jpg", ".jpeg", ".png"]) }
+    exts = {
+        e.lower()
+        for e in cfg.get("io", {}).get("image_extensions", [".jpg", ".jpeg", ".png"])
+    }
     results_dir = Path(cfg.get("io", {}).get("results_dir", "results"))
     save_overlays = bool(cfg.get("io", {}).get("save_overlays", False))
     save_crops = bool(cfg.get("io", {}).get("save_crops", False))
@@ -345,6 +394,7 @@ def compare_results(dirs: list[str], out_path: str | None = None) -> None:
     # Optional CSV
     if out_path:
         import csv
+
         with open(out_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
@@ -354,17 +404,49 @@ def compare_results(dirs: list[str], out_path: str | None = None) -> None:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Analyze food images and estimate nutrition.")
-    parser.add_argument("directory", nargs="?", default="data", help="Directory containing images to analyze")
-    parser.add_argument("--config", dest="config", default=None, help="Path to JSON/YAML config file")
-    parser.add_argument("--no-depth", action="store_true", help="Disable depth estimation stage")
-    parser.add_argument("--score-threshold", type=float, default=None, help="Detector score threshold override")
-    parser.add_argument(
-        "--grams-full-plate", type=float, default=None, help="Grams corresponding to full-frame portion"
+    parser = argparse.ArgumentParser(
+        description="Analyze food images and estimate nutrition."
     )
-    parser.add_argument("--results-dir", default=None, help="Where to write JSON outputs (overrides config)")
-    parser.add_argument("--compare-dirs", nargs="+", default=None, help="Compare detection counts across result folders")
-    parser.add_argument("--compare-out", default=None, help="Optional CSV path for --compare-dirs output")
+    parser.add_argument(
+        "directory",
+        nargs="?",
+        default="data",
+        help="Directory containing images to analyze",
+    )
+    parser.add_argument(
+        "--config", dest="config", default=None, help="Path to JSON/YAML config file"
+    )
+    parser.add_argument(
+        "--no-depth", action="store_true", help="Disable depth estimation stage"
+    )
+    parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=None,
+        help="Detector score threshold override",
+    )
+    parser.add_argument(
+        "--grams-full-plate",
+        type=float,
+        default=None,
+        help="Grams corresponding to full-frame portion",
+    )
+    parser.add_argument(
+        "--results-dir",
+        default=None,
+        help="Where to write JSON outputs (overrides config)",
+    )
+    parser.add_argument(
+        "--compare-dirs",
+        nargs="+",
+        default=None,
+        help="Compare detection counts across result folders",
+    )
+    parser.add_argument(
+        "--compare-out",
+        default=None,
+        help="Optional CSV path for --compare-dirs output",
+    )
     return parser.parse_args(argv)
 
 
@@ -375,7 +457,9 @@ def apply_overrides(cfg: dict, args: argparse.Namespace) -> dict:
     if args.score_threshold is not None:
         cfg.setdefault("detector", {})["score_threshold"] = float(args.score_threshold)
     if args.grams_full_plate is not None:
-        cfg.setdefault("volume", {})["grams_for_full_plate"] = float(args.grams_full_plate)
+        cfg.setdefault("volume", {})["grams_for_full_plate"] = float(
+            args.grams_full_plate
+        )
     if args.results_dir is not None:
         cfg.setdefault("io", {})["results_dir"] = str(args.results_dir)
     return cfg

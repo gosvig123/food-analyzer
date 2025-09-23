@@ -27,11 +27,11 @@ from .types import Detection
 
 
 class FoodDetector:
-    """Wrapper around a detection model with a heuristic fallback."""
+    """High-recall food detection with hybrid segmentation approach."""
 
     def __init__(
         self,
-        score_threshold: float = 0.5,
+        score_threshold: float = 0.25,
         iou_threshold: float = 0.45,
         max_detections: int = 100,
         device: str | None = None,
@@ -42,12 +42,12 @@ class FoodDetector:
         augment: bool = False,
         tta_imgsz: list[int] | None = None,
         refine_masks: bool = True,
-        refine_method: str = "morphology",  # options: morphology, sam
-        morph_kernel: int = 3,
-        morph_iters: int = 1,
+        refine_method: str = "sam",
+        morph_kernel: int = 5,
+        morph_iters: int = 2,
         sam_checkpoint: str | None = None,
         sam_model_type: str | None = None,
-        fusion_method: str = "soft_nms",  # options: nms, soft_nms
+        fusion_method: str = "soft_nms",
         soft_nms_sigma: float = 0.5,
     ) -> None:
         self.score_threshold = score_threshold
@@ -71,13 +71,13 @@ class FoodDetector:
         self.augment = bool(augment)
         self.tta_imgsz = tta_imgsz or []
         self.refine_masks = bool(refine_masks)
-        self.refine_method = (refine_method or "morphology").lower()
+        self.refine_method = (refine_method or "sam").lower()
         self.morph_kernel = int(max(1, morph_kernel))
         self.morph_iters = int(max(0, morph_iters))
         self.sam_checkpoint = sam_checkpoint
         self.sam_model_type = sam_model_type
         self._sam_predictor = None
-        self.fusion_method = (fusion_method or "nms").lower()
+        self.fusion_method = (fusion_method or "soft_nms").lower()
         self.soft_nms_sigma = float(max(1e-6, soft_nms_sigma))
 
         try:
@@ -86,7 +86,7 @@ class FoodDetector:
                     from ultralytics import YOLO  # type: ignore
                 except Exception as exc:  # pragma: no cover - optional dependency
                     raise RuntimeError(f"ultralytics not available: {exc}")
-                yolo_model = model_name or "yolov8n.pt"
+                yolo_model = model_name or "yolov8x-seg.pt"
                 self.model = YOLO(yolo_model)
                 names = getattr(self.model, "names", None)
                 if isinstance(names, dict):
@@ -124,14 +124,13 @@ class FoodDetector:
                 self.model.to(self.device).eval()
                 self.categories = weights.meta.get("categories", self.categories)
         except Exception as exc:  # pragma: no cover - best-effort offline fallback
-            warnings.warn(f"Falling back to heuristic detector: {exc}")
+            warnings.warn(f"Model loading failed: {exc}")
             self.model = None
-            self.backend = "heuristic"
 
     def _refine_polygon(
         self, image: Image.Image, polygon: list[tuple[float, float]]
     ) -> list[tuple[float, float]]:
-        # SAM-based refinement
+        # SAM-based refinement for optimal accuracy
         if self.refine_method == "sam":
             try:
                 predictor = self._ensure_sam()
@@ -144,18 +143,20 @@ class FoodDetector:
                 # Prepare image for predictor
                 im = np.array(image.convert("RGB"))
                 predictor.set_image(im)
+                # Use multimask for better accuracy
                 masks, scores, _ = predictor.predict(
                     point_coords=None,
                     point_labels=None,
                     box=np.array([x1, y1, x2, y2])[None, :],
-                    multimask_output=False,
+                    multimask_output=True,
                 )
-                mask = masks[0].astype(np.uint8) * 255
+                # Select best mask by score
+                best_idx = np.argmax(scores)
+                mask = masks[best_idx].astype(np.uint8) * 255
                 return self._mask_to_polygon(mask)
             except Exception:
-                # Fallback to morphology if SAM fails
                 pass
-        # Morphological refinement
+        # Morphological refinement fallback
         if cv2 is None:
             return polygon
         w, h = image.size
@@ -204,7 +205,7 @@ class FoodDetector:
             predictions = torch.softmax(output, dim=1)
             pred_classes = torch.argmax(predictions, dim=1).squeeze().cpu().numpy()
 
-        # Extract food-related classes (approximate mapping from COCO classes)
+        # Extract food-related classes (COCO classes for food items)
         food_classes = {
             47,
             48,
@@ -237,50 +238,6 @@ class FoodDetector:
 
         return masks
 
-    def _combine_instance_and_semantic_masks(
-        self,
-        instance_masks: list[np.ndarray],
-        semantic_masks: list[np.ndarray],
-        image_size: tuple[int, int],
-    ) -> list[np.ndarray]:
-        """Combine instance and semantic masks for improved segmentation accuracy."""
-        if not instance_masks and not semantic_masks:
-            return []
-
-        combined_masks = []
-
-        # Start with instance masks as they're more precise
-        for inst_mask in instance_masks:
-            combined_masks.append(inst_mask)
-
-        # Add semantic masks that don't significantly overlap with instance masks
-        for sem_mask in semantic_masks:
-            has_significant_overlap = False
-            for inst_mask in instance_masks:
-                # Resize semantic mask to match instance mask if needed
-                if sem_mask.shape != inst_mask.shape:
-                    sem_mask_resized = (
-                        cv2.resize(sem_mask, (inst_mask.shape[1], inst_mask.shape[0]))
-                        if cv2
-                        else sem_mask
-                    )
-                else:
-                    sem_mask_resized = sem_mask
-
-                # Calculate overlap
-                intersection = np.logical_and(inst_mask > 0, sem_mask_resized > 0).sum()
-                union = np.logical_or(inst_mask > 0, sem_mask_resized > 0).sum()
-                iou = intersection / union if union > 0 else 0
-
-                if iou > 0.3:  # Significant overlap threshold
-                    has_significant_overlap = True
-                    break
-
-            if not has_significant_overlap:
-                combined_masks.append(sem_mask)
-
-        return combined_masks
-
     def _mask_to_polygon(self, mask: np.ndarray) -> list[tuple[float, float]]:
         if cv2 is None:
             ys, xs = np.where(mask > 0)
@@ -299,14 +256,16 @@ class FoodDetector:
         if not contours:
             return []
         cnt = max(contours, key=cv2.contourArea)
+        # High-precision polygon extraction
         peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.01 * max(1.0, peri), True)
+        approx = cv2.approxPolyDP(cnt, 0.002 * max(1.0, peri), True)
         poly = [(float(p[0][0]), float(p[0][1])) for p in approx]
-        step = max(1, int(len(poly) / 300))
+        # Reduce polygon complexity while preserving accuracy
+        step = max(1, int(len(poly) / 200))
         return poly[::step]
 
     def _inference_mask_rcnn_deeplabv3(self, image: Image.Image) -> List[Detection]:
-        """Inference using Mask R-CNN + DeepLabV3+ hybrid approach."""
+        """Inference using Mask R-CNN + DeepLabV3+ hybrid approach for better recall."""
         # Instance segmentation with Mask R-CNN
         tensor = self.preprocess(image).to(self.device)
 
@@ -365,7 +324,7 @@ class FoodDetector:
                 if inst_mask.shape != sem_mask.shape:
                     continue
                 overlap = np.logical_and(inst_mask > 0, sem_mask > 0).sum()
-                if overlap > (sem_mask > 0).sum() * 0.5:  # 50% covered by instance
+                if overlap > (sem_mask > 0).sum() * 0.4:  # 40% covered by instance
                     has_instance_coverage = True
                     break
 
@@ -389,7 +348,7 @@ class FoodDetector:
                         additional_detections.append(
                             Detection(
                                 box=(x, y, x + w, y + h),
-                                confidence=0.7,  # Lower confidence for semantic-only detections
+                                confidence=0.6,  # Lower confidence for semantic-only detections
                                 label="food",
                                 mask_polygon=mask_polygon,
                             )
@@ -403,51 +362,6 @@ class FoodDetector:
             all_detections = self._apply_nms(all_detections)
 
         return all_detections[: self.max_detections]
-
-    def _inference_mask_rcnn(self, image: Image.Image) -> List[Detection]:
-        """Inference using standalone Mask R-CNN."""
-        tensor = self.preprocess(image).to(self.device)
-
-        with torch.no_grad():
-            outputs = self.model([tensor])[0]
-
-        detections = []
-        for score, label_idx, box, mask in zip(
-            outputs.get("scores", []).cpu().numpy(),
-            outputs.get("labels", []).cpu().numpy(),
-            outputs.get("boxes", []).cpu().numpy(),
-            outputs.get("masks", []).cpu().numpy(),
-        ):
-            if score < self.score_threshold:
-                continue
-
-            left, top, right, bottom = (int(round(v)) for v in box)
-            category = (
-                self.categories[label_idx]
-                if 0 <= label_idx < len(self.categories)
-                else "food"
-            )
-
-            # Convert mask to binary and extract polygon
-            mask_binary = (mask[0] > 0.5).astype(np.uint8) * 255
-            mask_polygon = self._mask_to_polygon(mask_binary)
-
-            if mask_polygon and self.refine_masks:
-                try:
-                    mask_polygon = self._refine_polygon(image, mask_polygon)
-                except Exception:
-                    pass
-
-            detections.append(
-                Detection(
-                    box=(left, top, right, bottom),
-                    confidence=float(score),
-                    label=category,
-                    mask_polygon=mask_polygon,
-                )
-            )
-
-        return detections[: self.max_detections]
 
     def _apply_nms(self, detections: List[Detection]) -> List[Detection]:
         """Apply Non-Maximum Suppression to remove overlapping detections."""
@@ -484,8 +398,13 @@ class FoodDetector:
     def __call__(self, image: Image.Image) -> List[Detection]:
         image = image.convert("RGB")
 
+        # Handle Mask R-CNN + DeepLabV3+ hybrid backend for maximum recall
+        if self.model is not None and self.backend == "mask_rcnn_deeplabv3":
+            return self._inference_mask_rcnn_deeplabv3(image)
+
         if self.model is not None and self.backend == "yolov8":
             try:
+                # Optimized parameters for highest accuracy
                 yargs = dict(
                     verbose=False,
                     conf=float(self.score_threshold),
@@ -493,13 +412,15 @@ class FoodDetector:
                     max_det=int(self.max_detections),
                     retina_masks=self.retina_masks,
                     augment=self.augment,
+                    half=False,  # Use full precision for accuracy
+                    device=self.device,
                 )
                 if self.imgsz:
                     yargs["imgsz"] = int(self.imgsz)
                 results = self.model(image, **yargs)
             except Exception as exc:  # pragma: no cover - runtime safeguard
-                warnings.warn(f"YOLOv8 inference failed, falling back: {exc}")
-                results = []
+                warnings.warn(f"YOLOv8 inference failed: {exc}")
+                return []
 
             def parse_results(rs) -> List[Detection]:
                 parsed: List[Detection] = []
@@ -557,231 +478,23 @@ class FoodDetector:
                         )
                 return parsed
 
-            width, height = image.size
+            detections: List[Detection] = parse_results(results)
 
-            def iou_box(a: Detection, b: Detection) -> float:
-                ax1, ay1, ax2, ay2 = a.box
-                bx1, by1, bx2, by2 = b.box
-                inter_x1 = max(ax1, bx1)
-                inter_y1 = max(ay1, by1)
-                inter_x2 = min(ax2, bx2)
-                inter_y2 = min(ay2, by2)
-                iw = max(0, inter_x2 - inter_x1)
-                ih = max(0, inter_y2 - inter_y1)
-                inter = iw * ih
-                area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
-                area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
-                union = area_a + area_b - inter
-                return float(inter / union) if union > 0 else 0.0
-
-            def nms(dets: List[Detection], iou_thr: float) -> List[Detection]:
-                out: List[Detection] = []
-                for d in sorted(dets, key=lambda x: x.confidence, reverse=True):
-                    if all(iou_box(d, kept) < iou_thr for kept in out):
-                        out.append(d)
-                    if len(out) >= int(self.max_detections):
-                        break
-                return out
-
-            def soft_nms(
-                dets: List[Detection], iou_thr: float, sigma: float, score_thresh: float
-            ) -> List[Detection]:
-                boxes = dets[:]
-                keep: List[Detection] = []
-                while boxes and len(keep) < int(self.max_detections):
-                    boxes.sort(key=lambda x: x.confidence, reverse=True)
-                    best = boxes.pop(0)
-                    keep.append(best)
-                    new_boxes: List[Detection] = []
-                    for d in boxes:
-                        iou = iou_box(best, d)
-                        if iou > iou_thr:
-                            decay = float(np.exp(-(iou * iou) / max(1e-6, sigma)))
-                            new_score = float(d.confidence) * decay
-                        else:
-                            new_score = float(d.confidence)
-                        if new_score >= float(score_thresh):
-                            new_boxes.append(
-                                Detection(
-                                    box=d.box,
-                                    confidence=new_score,
-                                    label=d.label,
-                                    mask_polygon=d.mask_polygon,
-                                )
-                            )
-                    boxes = new_boxes
-                return keep
-
-            if self.augment:
-                # Manual TTA: multi-scale + flips (none, H, V, HV)
-                all_dets: List[Detection] = []
-                scales = (
-                    self.tta_imgsz
-                    if self.tta_imgsz
-                    else ([self.imgsz] if self.imgsz else [None])
-                )
-                flip_modes = ["none", "h", "v", "hv"]
-                for scale in scales:
-                    yargs_tta = dict(
-                        verbose=False,
-                        conf=float(self.score_threshold),
-                        iou=float(self.iou_threshold),
-                        max_det=int(self.max_detections),
-                        retina_masks=self.retina_masks,
-                        augment=False,
-                    )
-                    if scale:
-                        yargs_tta["imgsz"] = int(scale)
-                    for fm in flip_modes:
+            # Apply mask refinement if enabled
+            if detections and self.refine_masks:
+                for detection in detections:
+                    if detection.mask_polygon:
                         try:
-                            img_in = image
-                            if fm in ("h", "hv"):
-                                img_in = img_in.transpose(Image.FLIP_LEFT_RIGHT)
-                            if fm in ("v", "hv"):
-                                img_in = img_in.transpose(Image.FLIP_TOP_BOTTOM)
-                            rs = self.model(img_in, **yargs_tta)
-                            dets_raw: List[Detection] = parse_results(rs)
-                            # Unflip coordinates back to original frame
-                            for d in dets_raw:
-                                l, t, r, b = d.box
-                                new_l, new_r, new_t, new_b = l, r, t, b
-                                new_poly = d.mask_polygon
-                                if fm in ("h", "hv"):
-                                    new_l, new_r = width - r, width - l
-                                    if new_poly:
-                                        try:
-                                            new_poly = [
-                                                (float(width - x), float(y))
-                                                for x, y in new_poly
-                                            ]
-                                        except Exception:
-                                            new_poly = None
-                                if fm in ("v", "hv"):
-                                    new_t, new_b = height - b, height - t
-                                    if new_poly:
-                                        try:
-                                            new_poly = [
-                                                (float(x), float(height - y))
-                                                for x, y in new_poly
-                                            ]
-                                        except Exception:
-                                            new_poly = None
-                                # Optional mask refinement
-                                if new_poly and self.refine_masks:
-                                    try:
-                                        new_poly = self._refine_polygon(image, new_poly)
-                                    except Exception:
-                                        pass
-                                all_dets.append(
-                                    Detection(
-                                        box=(
-                                            int(new_l),
-                                            int(new_t),
-                                            int(new_r),
-                                            int(new_b),
-                                        ),
-                                        confidence=d.confidence,
-                                        label=d.label,
-                                        mask_polygon=new_poly,
-                                    )
-                                )
+                            detection.mask_polygon = self._refine_polygon(
+                                image, detection.mask_polygon
+                            )
                         except Exception:
-                            continue
-                if all_dets:
-                    if self.fusion_method == "soft_nms":
-                        detections = soft_nms(
-                            all_dets,
-                            float(self.iou_threshold),
-                            float(self.soft_nms_sigma),
-                            float(self.score_threshold),
-                        )
-                    else:
-                        detections = nms(all_dets, float(self.iou_threshold))
-                else:
-                    detections = []
-            else:
-                detections: List[Detection] = parse_results(results)
+                            pass
 
-                # Adaptive per-image thresholding: retry once if none or too many detections
-                if (len(detections) == 0) or (
-                    len(detections) > int(self.max_detections)
-                ):
-                    try:
-                        adj_conf = (
-                            max(0.1, float(self.score_threshold) - 0.2)
-                            if len(detections) == 0
-                            else min(0.9, float(self.score_threshold) + 0.2)
-                        )
-                        yargs = dict(
-                            verbose=False,
-                            conf=float(adj_conf),
-                            iou=float(self.iou_threshold),
-                            max_det=int(self.max_detections),
-                            retina_masks=self.retina_masks,
-                            augment=False,
-                        )
-                        if self.imgsz:
-                            yargs["imgsz"] = int(self.imgsz)
-                        retry = self.model(image, **yargs)
-                        detections = parse_results(retry)
-                    except Exception:
-                        pass
+            return detections
 
-            if detections:
-                return detections
-
-        # Handle Mask R-CNN + DeepLabV3+ backend
-        if self.model is not None and self.backend == "mask_rcnn_deeplabv3":
-            return self._inference_mask_rcnn_deeplabv3(image)
-
-        # Handle standalone Mask R-CNN backend
-        if self.model is not None and self.backend == "mask_rcnn":
-            return self._inference_mask_rcnn(image)
-
-        tensor = self.preprocess(image)
-        if self.model is not None and self.backend != "yolov8":
-            with torch.no_grad():
-                outputs = self.model([tensor.to(self.device)])[0]
-
-            def build_from_outputs(threshold: float) -> List[Detection]:
-                built: List[Detection] = []
-                for score, label_idx, box in zip(
-                    outputs.get("scores", []).tolist(),
-                    outputs.get("labels", []).tolist(),
-                    outputs.get("boxes", []).tolist(),
-                ):
-                    if score < threshold:
-                        continue
-                    left, top, right, bottom = (int(round(v)) for v in box)
-                    category = (
-                        self.categories[label_idx]
-                        if 0 <= label_idx < len(self.categories)
-                        else "food"
-                    )
-                    built.append(
-                        Detection(
-                            box=(left, top, right, bottom),
-                            confidence=float(score),
-                            label=category,
-                        )
-                    )
-                return built
-
-            detections = build_from_outputs(self.score_threshold)
-            max_detections = 20
-            if (len(detections) == 0) or (len(detections) > max_detections):
-                alt_th = (
-                    max(0.1, float(self.score_threshold) - 0.2)
-                    if len(detections) == 0
-                    else min(0.9, float(self.score_threshold) + 0.2)
-                )
-                detections = build_from_outputs(alt_th)
-
-            if detections:
-                return detections
-
-        width, height = image.size
-        return [Detection(box=(0, 0, width, height), confidence=1.0, label="food")]
+        # No fallback - fail gracefully if model not available
+        return []
 
 
 __all__ = ["FoodDetector"]

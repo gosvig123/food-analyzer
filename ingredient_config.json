@@ -1,0 +1,183 @@
+{
+  "apis": {
+    "usda": {
+      "base_url": "https://api.nal.usda.gov/fdc/v1/foods/search",
+      "timeout": 10,
+      "page_size": 50,
+      "max_results": 500,
+      "headers": {
+        "Accept": "application/json"
+      },
+      "params": {
+        "dataType": ["Foundation", "SR Legacy"],
+        "sortBy": "publishedDate",
+        "sortOrder": "desc"
+      }
+    },
+    "openfoodfacts": {
+      "base_url": "https://world.openfoodfacts.org/cgi/ingredients.pl",
+      "timeout": 15,
+      "page_size": 100,
+      "max_results": 500,
+      "headers": {
+        "User-Agent": "FoodAnalyzer/1.0"
+      },
+      "params": {
+        "json": "1"
+      }
+    }
+  },
+  "models": {
+    "clip": {
+      "name": "ViT-B-32",
+      "pretrained": "laion2b_s34b_b79k",
+      "embedding_threshold": 0.8,
+      "max_results": 200
+    },
+    "efficientnet": {
+      "name": "efficientnet_b0",
+      "pretrained": null,
+      "embedding_threshold": 0.8,
+      "max_results": 300
+    }
+  },
+  "search_categories": [
+    "fruits",
+    "vegetables",
+    "grains",
+    "dairy",
+    "meat",
+    "seafood",
+    "nuts",
+    "spices",
+    "herbs",
+    "beans",
+    "oils",
+    "proteins"
+  ],
+  "food_keywords": {
+    "categories": [
+      "fruits",
+      "vegetables",
+      "meat",
+      "dairy",
+      "grains",
+      "seafood",
+      "herbs",
+      "spices",
+      "nuts",
+      "seeds",
+      "beans",
+      "legumes",
+      "oils"
+    ],
+    "indicators": [
+      "food",
+      "fruit",
+      "vegetable",
+      "meat",
+      "fish",
+      "dairy",
+      "cheese",
+      "bread",
+      "soup",
+      "salad",
+      "sandwich",
+      "pizza",
+      "pasta",
+      "rice",
+      "noodle",
+      "egg",
+      "milk",
+      "butter",
+      "oil",
+      "sauce",
+      "spice",
+      "herb"
+    ],
+    "specific_foods": [
+      "apple",
+      "orange",
+      "banana",
+      "tomato",
+      "potato",
+      "onion",
+      "chicken",
+      "beef",
+      "pork",
+      "salmon",
+      "tuna"
+    ]
+  },
+  "cleaning_patterns": [
+    "\\b(raw|cooked|fresh|frozen|canned|dried|organic)\\b",
+    "\\b(whole|half|quarter|sliced|diced|chopped)\\b",
+    "\\b(large|small|medium|mini)\\b",
+    "\\([^)]*\\)",
+    "\\d+\\s*(oz|lb|kg|g|ml|l)\\b"
+  ],
+  "generic_terms": [
+    "food",
+    "item",
+    "product",
+    "dish",
+    "meal",
+    "snack",
+    "beverage"
+  ],
+  "cache_maxsize": 1,
+  "cache_file": "ingredient_cache.json",
+  "fallback_ingredients": [
+    "apple",
+    "banana",
+    "orange",
+    "lemon",
+    "lime",
+    "strawberry",
+    "blueberry",
+    "tomato",
+    "cucumber",
+    "onion",
+    "garlic",
+    "carrot",
+    "broccoli",
+    "spinach",
+    "lettuce",
+    "bell pepper",
+    "mushroom",
+    "celery",
+    "avocado",
+    "corn",
+    "peas",
+    "chicken",
+    "beef",
+    "pork",
+    "salmon",
+    "tuna",
+    "egg",
+    "milk",
+    "cheese",
+    "yogurt",
+    "butter",
+    "rice",
+    "bread",
+    "pasta",
+    "potato",
+    "quinoa",
+    "oats",
+    "beans",
+    "nuts",
+    "olive oil",
+    "salt",
+    "pepper",
+    "basil",
+    "oregano",
+    "thyme",
+    "parsley",
+    "flour",
+    "sugar",
+    "honey",
+    "vinegar",
+    "ginger"
+  ]
+}

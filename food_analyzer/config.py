@@ -4,13 +4,13 @@
 - Optionally supports YAML if PyYAML is available
 - Provides sane defaults aligned with the current minimal pipeline
 """
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, Optional
 import json
 import warnings
-
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 DEFAULTS: Dict[str, Any] = {
     "detector": {
@@ -24,7 +24,8 @@ DEFAULTS: Dict[str, Any] = {
     "classifier": {
         "backend": "efficientnet_b0",  # or 'efficientnet_b4'
         "device": None,
-        "labels_path": "food_analyzer/food_labels.json",  # optional JSON list of class names
+        "dynamic_labels_source": "usda",  # API fallback: "usda", "openfoodfacts", or "basic"
+        "intelligent_labels_method": "hybrid",  # "imagenet", "clip", "nutrition", or "hybrid"
     },
     "volume": {
         "grams_for_full_plate": 300.0,
