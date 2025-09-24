@@ -1,0 +1,18 @@
+{
+  "breakfast_plate": ["tomato", "eggs", "flour", "lettuce"],
+  "buddha_bowl": [
+    "avocado",
+    "tomato",
+    "lettuce",
+    "lentils",
+    "sweet potato",
+    "onion",
+    "dressing"
+  ],
+  "curry_rice": ["spinach", "rice", "carrot", "sauce"],
+  "ramen_bowl": ["eggs", "green pepper", "tomato", "seeds", "noodles"],
+  "stir_fry": ["rice", "carrot", "peas"],
+  "sushi_platter": ["salmon", "avocado", "seaweed", "soy sauce"],
+  "tacos": ["beef", "lime"],
+  "pizza": ["cheese", "tomato"]
+}

@@ -8,7 +8,6 @@ from typing import Dict, Tuple, Union
 
 from PIL import Image
 
-
 ImageInput = Union[str, Path, Image.Image]
 
 
@@ -29,6 +28,4 @@ class AnalyzedFood:
     label: str
     confidence: float
     box: Tuple[int, int, int, int]
-    portion_grams: float
-    nutrition: Dict[str, float]
     mask_polygon: list[tuple[float, float]] | None = None

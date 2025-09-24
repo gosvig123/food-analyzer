@@ -1,4 +1,4 @@
-"""Lightweight inference pipeline for food recognition and nutrition estimation."""
+"""Lightweight inference pipeline for food recognition and ingredient detection."""
 
 from .classification import FoodClassifier
 from .core import (
@@ -9,7 +9,6 @@ from .core import (
     analyze_image,
 )
 from .detection import DepthEstimator, FoodDetector
-from .nutrition import NutritionLookup, VolumeEstimator
 from .utils import load_config, resolve_path_relative_to_project
 
 __all__ = [
@@ -20,8 +19,6 @@ __all__ = [
     "FoodClassifier",
     "FoodDetector",
     "FoodInferencePipeline",
-    "NutritionLookup",
-    "VolumeEstimator",
     "analyze_image",
     "load_config",
     "resolve_path_relative_to_project",

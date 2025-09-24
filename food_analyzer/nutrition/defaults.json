@@ -1,8 +1,0 @@
-{
-  "generic_food": {"calories": 200.0, "protein": 8.0, "carbs": 25.0, "fat": 8.0},
-  "salad": {"calories": 90.0, "protein": 4.0, "carbs": 12.0, "fat": 3.0},
-  "soup": {"calories": 120.0, "protein": 6.0, "carbs": 14.0, "fat": 4.0},
-  "dessert": {"calories": 250.0, "protein": 5.0, "carbs": 30.0, "fat": 12.0},
-  "drink": {"calories": 60.0, "protein": 1.0, "carbs": 15.0, "fat": 0.0}
-}
-

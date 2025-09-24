@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Set
 
 from ..data.ingredient_config import IngredientConfig, load_ingredient_config
 
@@ -188,8 +186,8 @@ class IngredientLabelFetcher:
 def get_dynamic_ingredient_labels(
     source: str = "usda",
     cache_file: str | Path | None = None,
-    config: Optional[IngredientConfig] = None,
-) -> List[str]:
+    config: IngredientConfig | None = None,
+) -> list[str]:
     """
     Convenience function to get ingredient labels dynamically.
 

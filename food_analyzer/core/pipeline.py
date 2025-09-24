@@ -10,8 +10,6 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 from ..classification.classifier import FoodClassifier
 from ..detection.depth import DepthEstimator
 from ..detection.detector import FoodDetector
-from ..nutrition.lookup import NutritionLookup
-from ..nutrition.volume import VolumeEstimator
 from .types import AnalyzedFood, Detection, ImageInput
 
 
@@ -22,15 +20,11 @@ class FoodInferencePipeline:
         self,
         detector: FoodDetector | None = None,
         classifier: FoodClassifier | None = None,
-        volume_estimator: VolumeEstimator | None = None,
-        nutrition_lookup: NutritionLookup | None = None,
         depth_estimator: DepthEstimator | None = None,
         use_detector_labels: bool = False,
     ) -> None:
         self.detector = detector or FoodDetector()
         self.classifier = classifier or FoodClassifier()
-        self.volume_estimator = volume_estimator or VolumeEstimator()
-        self.nutrition_lookup = nutrition_lookup or NutritionLookup()
         self.depth_estimator = depth_estimator or DepthEstimator()
         self.use_detector_labels = use_detector_labels
 
@@ -75,22 +69,13 @@ class FoodInferencePipeline:
                 }
             else:
                 classification = self.classifier(crop)
-            grams = self.volume_estimator(
-                detection.box,
-                image.size,
-                depth_map=depth_map,
-                depth_mean=depth_mean,
-            )
             label = str(classification.get("label", detection.label))
             label_conf = float(classification.get("confidence", 1.0))
-            nutrition = self.nutrition_lookup(label, grams)
             analyzed.append(
                 AnalyzedFood(
                     label=label,
                     confidence=float(min(detection.confidence, label_conf)),
                     box=detection.box,
-                    portion_grams=grams,
-                    nutrition=nutrition,
                     mask_polygon=detection.mask_polygon,
                 )
             )

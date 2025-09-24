@@ -374,10 +374,11 @@ class FoodDetector:
                         )
                     )
 
-        # Combine all detections without NMS filtering
+        # Combine all detections - allow full overlap for ingredients
         all_detections = instance_detections + additional_detections
 
-        # Return all detections without overlap filtering
+        # Sort by confidence and return top detections (no overlap filtering)
+        all_detections.sort(key=lambda x: x.confidence, reverse=True)
         return all_detections[: self.max_detections]
 
     def _apply_nms(self, detections: List[Detection]) -> List[Detection]:
@@ -418,6 +419,50 @@ class FoodDetector:
         # Handle Mask R-CNN + DeepLabV3+ hybrid backend for maximum recall
         if self.model is not None and self.backend == "mask_rcnn_deeplabv3":
             return self._inference_mask_rcnn_deeplabv3(image)
+
+        # Handle basic Mask R-CNN without overlap filtering
+        if self.model is not None and self.backend == "mask_rcnn":
+            tensor = self.preprocess(image).to(self.device)
+            with torch.no_grad():
+                outputs = self.model([tensor])[0]
+
+            detections = []
+            for score, label_idx, box, mask in zip(
+                outputs.get("scores", []).cpu().numpy(),
+                outputs.get("labels", []).cpu().numpy(),
+                outputs.get("boxes", []).cpu().numpy(),
+                outputs.get("masks", []).cpu().numpy(),
+            ):
+                if score < self.score_threshold:
+                    continue
+
+                left, top, right, bottom = (int(round(v)) for v in box)
+                category = (
+                    self.categories[label_idx]
+                    if 0 <= label_idx < len(self.categories)
+                    else "food"
+                )
+
+                mask_binary = (mask[0] > 0.5).astype(np.uint8) * 255
+                mask_polygon = self._mask_to_polygon(mask_binary)
+                if mask_polygon and self.refine_masks:
+                    try:
+                        mask_polygon = self._refine_polygon(image, mask_polygon)
+                    except Exception:
+                        pass
+
+                detections.append(
+                    Detection(
+                        box=(left, top, right, bottom),
+                        confidence=float(score),
+                        label=category,
+                        mask_polygon=mask_polygon,
+                    )
+                )
+
+            # Sort by confidence and return without overlap filtering
+            detections.sort(key=lambda x: x.confidence, reverse=True)
+            return detections[: self.max_detections]
 
         # No fallback - fail gracefully if model not available
         return []
