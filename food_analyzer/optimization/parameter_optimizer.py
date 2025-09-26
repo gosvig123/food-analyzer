@@ -41,28 +41,6 @@ class ParameterOptimizer:
         with open(self.config_path, "w") as f:
             json.dump(config, f, indent=2)
 
-    def get_optimization_space(self) -> Dict[str, List[Any]]:
-        """Define parameter search space for fundamental parameters."""
-        return {
-            # Detection parameters - most impact on recall
-            "detector.score_threshold": [0.001, 0.005, 0.01, 0.02, 0.03, 0.05],
-            "detector.max_detections": [50, 75, 100, 150, 200],
-            "detector.iou_threshold": [0.3, 0.4, 0.5, 0.6, 0.7],
-            # Classification parameters
-            "classifier.temperature": [0.8, 1.0, 1.2, 1.5, 2.0],  # Temperature scaling
-            "classifier.confidence_threshold": [0.1, 0.2, 0.3, 0.4, 0.5],
-            # Image preprocessing
-            "detector.imgsz": [1024, 1280, 1536, 1792],
-            "detector.augment": [True, False],
-            # Multi-scale inference
-            "classifier.multi_scale": [True, False],
-            "classifier.ensemble_weights": [
-                [1.0, 1.0, 1.0],  # Equal weights
-                [0.5, 1.0, 1.5],  # Favor larger scales
-                [1.5, 1.0, 0.5],  # Favor smaller scales
-            ],
-        }
-
     def apply_parameters(
         self, config: Dict[str, Any], params: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -83,26 +61,6 @@ class ParameterOptimizer:
             current[keys[-1]] = value
 
         return new_config
-
-    def calculate_weighted_score(self, metrics: Dict[str, float]) -> float:
-        """Calculate optimization score prioritizing recall."""
-        precision = metrics.get("average_precision", 0.0)
-        recall = metrics.get("average_recall", 0.0)
-
-        # Heavily penalize if precision is too low (avoid pure noise)
-        if precision < self.target.precision_min:
-            precision_penalty = (self.target.precision_min - precision) * 2
-        else:
-            precision_penalty = 0
-
-        # Weighted score: prioritize recall, ensure minimum precision
-        score = (
-            self.target.f1_weight_recall * recall
-            + (1 - self.target.f1_weight_recall) * precision
-            - precision_penalty
-        )
-
-        return max(0.0, score)
 
     def get_parameter_suggestions(
         self, evaluation_results: Dict[str, Any]

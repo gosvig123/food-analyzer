@@ -410,38 +410,6 @@ class FoodDetector:
         all_detections.sort(key=lambda x: x.confidence, reverse=True)
         return all_detections[: self.max_detections]
 
-    def _apply_nms(self, detections: List[Detection]) -> List[Detection]:
-        """Apply Non-Maximum Suppression to remove overlapping detections."""
-        if len(detections) <= 1:
-            return detections
-
-        def iou_box(a: Detection, b: Detection) -> float:
-            ax1, ay1, ax2, ay2 = a.box
-            bx1, by1, bx2, by2 = b.box
-            inter_x1 = max(ax1, bx1)
-            inter_y1 = max(ay1, by1)
-            inter_x2 = min(ax2, bx2)
-            inter_y2 = min(ay2, by2)
-            iw = max(0, inter_x2 - inter_x1)
-            ih = max(0, inter_y2 - inter_y1)
-            inter = iw * ih
-            area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
-            area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
-            union = area_a + area_b - inter
-            return float(inter / union) if union > 0 else 0.0
-
-        # Sort by confidence
-        sorted_dets = sorted(detections, key=lambda x: x.confidence, reverse=True)
-        keep = []
-
-        for det in sorted_dets:
-            if all(iou_box(det, kept) < self.iou_threshold for kept in keep):
-                keep.append(det)
-                if len(keep) >= self.max_detections:
-                    break
-
-        return keep
-
     def __call__(self, image: Image.Image) -> List[Detection]:
         image = image.convert("RGB")
 

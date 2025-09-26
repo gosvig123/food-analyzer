@@ -171,17 +171,6 @@ class IngredientLabelFetcher:
         """Return a basic set of common ingredients as fallback."""
         return self.config.fallback_ingredients
 
-    def refresh_cache(self, source: str = "usda") -> List[str]:
-        """Force refresh the ingredient cache from API."""
-        cache_key = f"{source}_ingredients"
-        if cache_key in self._cache:
-            del self._cache[cache_key]
-
-        # Clear LRU cache
-        self.get_ingredient_labels.cache_clear()
-
-        return self.get_ingredient_labels(source)
-
 
 def get_dynamic_ingredient_labels(
     source: str = "usda",

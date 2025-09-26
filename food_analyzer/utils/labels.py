@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Optional, Tuple
-
-import json
 
 
 def _normalize_token(value: str) -> str:
@@ -89,7 +88,10 @@ class LabelNormalizer:
                 if canonical_target:
                     alias_to_canonical[alias_key] = canonical_target
 
-        return cls(alias_to_canonical=alias_to_canonical, canonical_to_display=canonical_to_display)
+        return cls(
+            alias_to_canonical=alias_to_canonical,
+            canonical_to_display=canonical_to_display,
+        )
 
     def normalize(self, value: Optional[str]) -> Optional[str]:
         """Return the canonical label for the given value if known."""
@@ -100,10 +102,6 @@ class LabelNormalizer:
     def display(self, canonical: str) -> str:
         """Return the preferred display value for a canonical label."""
         return self.canonical_to_display.get(canonical, canonical)
-
-    def known_labels(self) -> set[str]:
-        """Return the set of canonical labels managed by this normalizer."""
-        return set(self.canonical_to_display.keys())
 
 
 def load_synonym_map(path: Path = Path("dynamic_synonyms.json")) -> Dict[str, str]:
