@@ -41,7 +41,7 @@ class DepthEstimator:
 
         array = np.asarray(image)
         input_batch = self.transform(array).to(self.device)
-        with torch.no_grad():
+        with torch.inference_mode():
             prediction = self.model(input_batch)
             if prediction.ndim == 3:
                 prediction = prediction.unsqueeze(0)

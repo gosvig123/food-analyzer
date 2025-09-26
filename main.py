@@ -17,7 +17,15 @@ from food_analyzer.classification.classifier import FoodClassifier
 from food_analyzer.core.pipeline import FoodInferencePipeline
 from food_analyzer.detection.depth import DepthEstimator
 from food_analyzer.detection.detector import FoodDetector
+
+# Results I/O is handled by a dedicated helper (keeps main.py focused on orchestration)
+from food_analyzer.io.results_writer import ResultsWriter
 from food_analyzer.utils.config import load_config, resolve_path_relative_to_project
+from food_analyzer.utils.labels import (
+    LabelNormalizer,
+    align_ground_truth_with_labels,
+    load_synonym_map,
+)
 
 
 def iter_image_paths(directory: Path, extensions: Set[str]) -> Iterable[Path]:
@@ -73,230 +81,23 @@ def format_aggregate_row(entry: dict) -> str:
     )
 
 
-def write_results(
-    results_dir: Path,
-    image_path: Path,
-    detections: List[dict],
-    aggregates: List[dict],
-    totals: dict,
-) -> None:
-    results_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "image": str(image_path),
-        "top_detections": detections[:5],
-        "detections": detections,
-        "aggregated": aggregates,
-        "totals": totals,
-    }
-    output_path = results_dir / f"{image_path.stem}.json"
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+# Results are written via ResultsWriter (see food_analyzer/io/results_writer.py).
+# The previous inline functions have been removed and callers now use ResultsWriter.
 
 
-def write_highest_predictions_csv(
-    results_dir: Path,
-    image_path: Path,
-    detections: List[dict],
-) -> None:
-    """Write the highest prediction for each ingredient per image to CSV."""
-    results_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = results_dir / "highest_predictions.csv"
-
-    # Check if CSV file exists to determine if we need headers
-    write_headers = not csv_path.exists()
-
-    # Find highest confidence prediction for each unique ingredient
-    ingredient_predictions = {}
-    for detection in detections:
-        label = detection.get("label", "unknown")
-        confidence = float(detection.get("confidence", 0.0))
-
-        if (
-            label not in ingredient_predictions
-            or confidence > ingredient_predictions[label]["confidence"]
-        ):
-            ingredient_predictions[label] = {
-                "image": image_path.name,
-                "ingredient": label,
-                "confidence": confidence,
-                "box": detection.get("box", []),
-            }
-
-    # Write to CSV
-    with csv_path.open("a", newline="", encoding="utf-8") as csvfile:
-        fieldnames = [
-            "image",
-            "ingredient",
-            "confidence",
-            "box_left",
-            "box_top",
-            "box_right",
-            "box_bottom",
-        ]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-        if write_headers:
-            writer.writeheader()
-
-        for prediction in ingredient_predictions.values():
-            box = prediction["box"]
-            row = {
-                "image": prediction["image"],
-                "ingredient": prediction["ingredient"],
-                "confidence": prediction["confidence"],
-                "box_left": box[0] if len(box) >= 4 else "",
-                "box_top": box[1] if len(box) >= 4 else "",
-                "box_right": box[2] if len(box) >= 4 else "",
-                "box_bottom": box[3] if len(box) >= 4 else "",
-            }
-            writer.writerow(row)
+# Highest-predictions CSV writing moved into ResultsWriter (food_analyzer/io/results_writer.py).
 
 
-def save_visuals(
-    results_dir: Path,
-    image_path: Path,
-    detections: List[dict],
-    save_overlays: bool,
-    save_crops: bool,
-    save_masks: bool,
-) -> None:
-    if not (save_overlays or save_crops):
-        return
-    try:
-        image = Image.open(image_path).convert("RGB")
-    except Exception:
-        return
-
-    if save_overlays:
-        overlays_dir = results_dir / "overlays"
-        overlays_dir.mkdir(parents=True, exist_ok=True)
-        base = image.convert("RGBA")
-        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay, "RGBA")
-        for det in detections:
-            box = det.get("box", None)
-            label = str(det.get("label", ""))
-            conf = float(det.get("confidence", 0.0))
-            mask_poly = det.get("mask_polygon")
-            # Draw mask polygon first (semi-transparent)
-            if isinstance(mask_poly, list) and len(mask_poly) >= 3:
-                try:
-                    poly_pts = [(int(x), int(y)) for x, y in mask_poly]
-                    draw.polygon(
-                        poly_pts, fill=(255, 0, 0, 80), outline=(255, 0, 0, 180)
-                    )
-                except Exception:
-                    pass
-            # Draw bounding box + label
-            if box and len(box) == 4:
-                left, top, right, bottom = [int(v) for v in box]
-                draw.rectangle(
-                    [(left, top), (right, bottom)], outline=(255, 0, 0, 220), width=3
-                )
-                txt = f"{label} {conf:.2f}"
-                tw, th = ImageDraw.Draw(Image.new("RGB", (1, 1))).textlength(txt), 12
-                draw.rectangle(
-                    [(left, max(0, top - th - 4)), (left + int(tw) + 6, top)],
-                    fill=(255, 0, 0, 220),
-                )
-                draw.text(
-                    (left + 3, max(0, top - th - 2)), txt, fill=(255, 255, 255, 255)
-                )
-        composed = Image.alpha_composite(base, overlay)
-        composed.save(overlays_dir / f"{image_path.stem}_overlay.png")
-
-    if save_crops:
-        crops_dir = results_dir / "crops"
-        crops_dir.mkdir(parents=True, exist_ok=True)
-        for idx, det in enumerate(detections):
-            box = det.get("box", None)
-            label = str(det.get("label", "item"))
-            mask_poly = det.get("mask_polygon")
-            if not box or len(box) != 4:
-                continue
-            # Base bbox crop
-            bbox_crop = image.crop(tuple(int(v) for v in box))
-            # Mask-tight crop (if available)
-            mask_crop = None
-            if isinstance(mask_poly, list) and len(mask_poly) >= 3:
-                try:
-                    xs = [int(x) for x, _ in mask_poly]
-                    ys = [int(y) for _, y in mask_poly]
-                    pad = 4
-                    left = max(min(xs) - pad, 0)
-                    top = max(min(ys) - pad, 0)
-                    right = min(max(xs) + pad, image.size[0])
-                    bottom = min(max(ys) + pad, image.size[1])
-                    mask_crop = image.crop((left, top, right, bottom))
-                except Exception:
-                    mask_crop = None
-            # Choose which to store as primary crop (mask if available)
-            primary_crop = mask_crop if mask_crop is not None else bbox_crop
-            safe_label = label.replace(" ", "_")
-            # Save both variants
-            (crops_dir / "bbox").mkdir(parents=True, exist_ok=True)
-            (crops_dir / "mask").mkdir(parents=True, exist_ok=True)
-            primary_crop.save(
-                crops_dir / f"{image_path.stem}_{idx:02d}_{safe_label}.jpg"
-            )
-            bbox_crop.save(
-                crops_dir
-                / "bbox"
-                / f"{image_path.stem}_{idx:02d}_{safe_label}_bbox.jpg"
-            )
-            (mask_crop if mask_crop is not None else bbox_crop).save(
-                crops_dir
-                / "mask"
-                / f"{image_path.stem}_{idx:02d}_{safe_label}_mask.jpg"
-            )
-            # Montage (side-by-side bbox vs mask-tight)
-            try:
-                left_img, right_img = (
-                    bbox_crop,
-                    (mask_crop if mask_crop is not None else bbox_crop),
-                )
-                h = max(left_img.height, right_img.height)
-                new_left = Image.new("RGB", (left_img.width, h), (255, 255, 255))
-                new_left.paste(left_img, (0, 0))
-                new_right = Image.new("RGB", (right_img.width, h), (255, 255, 255))
-                new_right.paste(right_img, (0, 0))
-                montage = Image.new(
-                    "RGB", (new_left.width + new_right.width, h), (255, 255, 255)
-                )
-                montage.paste(new_left, (0, 0))
-                montage.paste(new_right, (new_left.width, 0))
-                (crops_dir / "montage").mkdir(parents=True, exist_ok=True)
-                montage.save(
-                    crops_dir
-                    / "montage"
-                    / f"{image_path.stem}_{idx:02d}_{safe_label}_montage.jpg"
-                )
-            except Exception:
-                pass
-
-    if save_masks:
-        masks_dir = results_dir / "masks"
-        masks_dir.mkdir(parents=True, exist_ok=True)
-        for idx, det in enumerate(detections):
-            mask_poly = det.get("mask_polygon")
-            if not (isinstance(mask_poly, list) and len(mask_poly) >= 3):
-                continue
-            try:
-                mask_img = Image.new("L", image.size, 0)
-                mdraw = ImageDraw.Draw(mask_img)
-                poly_pts = [(int(x), int(y)) for x, y in mask_poly]
-                mdraw.polygon(poly_pts, fill=255)
-                label = str(det.get("label", "item")).replace(" ", "_")
-                mask_img.save(
-                    masks_dir / f"{image_path.stem}_{idx:02d}_{label}_mask.png"
-                )
-            except Exception:
-                continue
+# Visual saving responsibilities moved into ResultsWriter; no inline implementation here.
+# See food_analyzer/io/results_writer.py for the simplified, testable implementation.
 
 
 def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
     # Components
     detector_cfg = cfg.get("detector", {})
+    sam_checkpoint = resolve_path_relative_to_project(
+        detector_cfg.get("sam_checkpoint")
+    )
     detector = FoodDetector(
         score_threshold=float(detector_cfg.get("score_threshold", 0.25)),
         iou_threshold=float(detector_cfg.get("iou_threshold", 0.45)),
@@ -314,7 +115,7 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
         refine_method=str(detector_cfg.get("refine_method", "sam")),
         morph_kernel=int(detector_cfg.get("morph_kernel", 5)),
         morph_iters=int(detector_cfg.get("morph_iters", 2)),
-        sam_checkpoint=detector_cfg.get("sam_checkpoint"),
+        sam_checkpoint=str(sam_checkpoint) if sam_checkpoint else None,
         sam_model_type=detector_cfg.get("sam_model_type"),
         fusion_method=str(detector_cfg.get("fusion_method", "soft_nms")),
         soft_nms_sigma=float(detector_cfg.get("soft_nms_sigma", 0.5)),
@@ -349,6 +150,12 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
 def run_inference(target_dir: Path, cfg: dict) -> None:
     pipeline = build_pipeline_from_config(cfg)
 
+    label_normalizer: LabelNormalizer | None = None
+    classifier = getattr(pipeline, "classifier", None)
+    if getattr(classifier, "labels", None):
+        synonym_map = load_synonym_map()
+        label_normalizer = LabelNormalizer.from_labels(classifier.labels, synonym_map)
+
     exts = {
         e.lower()
         for e in cfg.get("io", {}).get("image_extensions", [".jpg", ".jpeg", ".png"])
@@ -357,6 +164,14 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
     save_overlays = bool(cfg.get("io", {}).get("save_overlays", False))
     save_crops = bool(cfg.get("io", {}).get("save_crops", False))
     save_masks = bool(cfg.get("io", {}).get("save_masks", False))
+
+    # Instantiate ResultsWriter once and use for all outputs
+    writer = ResultsWriter(
+        results_dir=results_dir,
+        save_overlays=save_overlays,
+        save_crops=save_crops,
+        save_masks=save_masks,
+    )
 
     images = list(iter_image_paths(target_dir, exts))
     if not images:
@@ -377,6 +192,17 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
             print(f"Loaded ground truth for {len(ground_truth)} plate types")
         except Exception as exc:
             print(f"Failed to load ground truth: {exc}")
+
+    if ground_truth and label_normalizer:
+        aligned_ground_truth, unmatched = align_ground_truth_with_labels(
+            ground_truth, label_normalizer
+        )
+        if unmatched:
+            print("Ground truth entries without dynamic label matches:")
+            for plate, items in unmatched.items():
+                formatted = ", ".join(sorted(set(items)))
+                print(f"  - {plate}: {formatted}")
+        ground_truth = aligned_ground_truth
 
     for image_path in images:
         try:
@@ -407,30 +233,16 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
         total_grams = sum(entry["grams"] for entry in aggregates)
         print(f"\nTotals: {total_grams:.1f}g | {total_calories:.1f} kcal")
 
-        # Save visualization assets if enabled
-        save_visuals(
-            results_dir=results_dir,
-            image_path=image_path,
-            detections=results,
-            save_overlays=save_overlays,
-            save_crops=save_crops,
-            save_masks=save_masks,
-        )
+        # Save visualization assets and results via ResultsWriter
+        writer.save_visuals(image_path=image_path, detections=results)
 
-        write_results(
-            results_dir=results_dir,
+        writer.write_results(
             image_path=image_path,
-            detections=results,
             aggregates=aggregates,
-            totals={"grams": total_grams, "calories": total_calories},
         )
 
         # Write highest predictions to CSV
-        write_highest_predictions_csv(
-            results_dir=results_dir,
-            image_path=image_path,
-            detections=results,
-        )
+        writer.write_highest_predictions_csv(image_path=image_path, detections=results)
 
         # Validate against ground truth if available
         if ground_truth:
@@ -438,14 +250,15 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
                 detections=results,
                 image_name=image_path.name,
                 ground_truth=ground_truth,
+                label_normalizer=label_normalizer,
             )
             validation_result["image_name"] = image_path.name
             validation_results.append(validation_result)
 
     # Save and print ground truth validation report
     if validation_results:
-        save_ground_truth_evaluation(results_dir, validation_results)
-        copy_analysis_to_results(results_dir)
+        writer.save_ground_truth_evaluation(validation_results)
+        writer.copy_analysis_to_results()
         print_ground_truth_report(validation_results)
 
 
@@ -496,7 +309,10 @@ def load_ground_truth(ground_truth_path: Path) -> Dict[str, Set[str]]:
 
 
 def validate_against_ground_truth(
-    detections: List[dict], image_name: str, ground_truth: Dict[str, Set[str]]
+    detections: List[dict],
+    image_name: str,
+    ground_truth: Dict[str, Set[str]],
+    label_normalizer: LabelNormalizer | None = None,
 ) -> Dict[str, float]:
     """Validate detections against ground truth for an image."""
     # Extract plate type from image name (assuming format: plateType_*.jpg)
@@ -538,41 +354,14 @@ def validate_against_ground_truth(
     # Get detected ingredients (normalize to lowercase)
     detected_ingredients = set()
     for detection in detections:
-        label = detection.get("label", "").lower()
-        if label:
-            # Load dynamic synonyms and combine with base synonyms
-            synonyms = load_dynamic_synonyms()
-
-            # Base synonym mappings
-            base_synonyms = {
-                "bell pepper": "green pepper",
-                "green bell pepper": "green pepper",
-                "red bell pepper": "green pepper",
-                "pepper": "green pepper",
-                "egg": "eggs",
-                "soya sauce": "soy sauce",
-                "salad dressing": "dressing",
-                "ranch dressing": "dressing",
-                "vinaigrette": "dressing",
-                "nori": "seaweed",
-                "kelp": "seaweed",
-                "pasta": "noodles",
-                "ramen": "noodles",
-                "udon": "noodles",
-                "sweet corn": "corn",
-                "lime juice": "lime",
-                "lemon": "lime",  # Similar citrus
-                "vegetable": "",  # filter out generic terms
-                "food": "",
-                "dish": "",
-                "meal": "",
-            }
-
-            # Merge dynamic synonyms with base synonyms
-            synonyms.update(base_synonyms)
-            label = synonyms.get(label, label)
-            if label:  # only add non-empty labels
-                detected_ingredients.add(label)
+        raw_label = detection.get("label")
+        normalized = None
+        if label_normalizer is not None:
+            normalized = label_normalizer.normalize(raw_label)
+        else:
+            normalized = str(raw_label).strip().lower() if raw_label else None
+        if normalized:
+            detected_ingredients.add(normalized)
 
     # Calculate metrics
     true_positives = len(detected_ingredients.intersection(expected_ingredients))
@@ -591,131 +380,28 @@ def validate_against_ground_truth(
         "recall": recall,
         "f1": f1,
         "plate_type": plate_type,
-        "expected": list(expected_ingredients),
-        "detected": list(detected_ingredients),
+        "expected": (
+            [label_normalizer.display(item) for item in sorted(expected_ingredients)]
+            if label_normalizer
+            else sorted(expected_ingredients)
+        ),
+        "detected": (
+            [label_normalizer.display(item) for item in sorted(detected_ingredients)]
+            if label_normalizer
+            else sorted(detected_ingredients)
+        ),
         "true_positives": true_positives,
         "false_positives": len(detected_ingredients) - true_positives,
         "false_negatives": len(expected_ingredients) - true_positives,
     }
 
 
-def save_ground_truth_evaluation(
-    results_dir: Path, validation_results: List[Dict]
-) -> None:
-    """Save ground truth evaluation results to results folder."""
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    # Calculate overall metrics
-    total_precision = sum(r["precision"] for r in validation_results)
-    total_recall = sum(r["recall"] for r in validation_results)
-    total_f1 = sum(r["f1"] for r in validation_results)
-    num_images = len(validation_results)
-
-    avg_precision = total_precision / num_images if num_images > 0 else 0.0
-    avg_recall = total_recall / num_images if num_images > 0 else 0.0
-    avg_f1 = total_f1 / num_images if num_images > 0 else 0.0
-
-    # Per plate type breakdown
-    plate_metrics = defaultdict(list)
-    for result in validation_results:
-        plate_type = result["plate_type"]
-        if plate_type != "unknown":
-            plate_metrics[plate_type].append(result)
-
-    # Create evaluation report
-    evaluation_report = {
-        "overall_metrics": {
-            "average_precision": avg_precision,
-            "average_recall": avg_recall,
-            "average_f1": avg_f1,
-            "total_images": num_images,
-        },
-        "per_plate_type": {},
-        "detailed_results": validation_results,
-    }
-
-    # Add per-plate metrics
-    for plate_type, results in plate_metrics.items():
-        if results:
-            avg_p = sum(r["precision"] for r in results) / len(results)
-            avg_r = sum(r["recall"] for r in results) / len(results)
-            avg_f = sum(r["f1"] for r in results) / len(results)
-            evaluation_report["per_plate_type"][plate_type] = {
-                "precision": avg_p,
-                "recall": avg_r,
-                "f1": avg_f,
-                "num_images": len(results),
-            }
-
-    # Save to JSON file
-    eval_path = results_dir / "ground_truth_evaluation.json"
-    with eval_path.open("w", encoding="utf-8") as f:
-        json.dump(evaluation_report, f, indent=2)
-
-    # Also save as CSV for easy analysis
-    csv_path = results_dir / "ground_truth_evaluation.csv"
-    with csv_path.open("w", newline="", encoding="utf-8") as csvfile:
-        fieldnames = [
-            "image_name",
-            "plate_type",
-            "precision",
-            "recall",
-            "f1",
-            "true_positives",
-            "false_positives",
-            "false_negatives",
-            "expected_ingredients",
-            "detected_ingredients",
-            "missed_ingredients",
-        ]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for result in validation_results:
-            missed = set(result["expected"]) - set(result["detected"])
-            writer.writerow(
-                {
-                    "image_name": result["image_name"],
-                    "plate_type": result["plate_type"],
-                    "precision": result["precision"],
-                    "recall": result["recall"],
-                    "f1": result["f1"],
-                    "true_positives": result["true_positives"],
-                    "false_positives": result["false_positives"],
-                    "false_negatives": result["false_negatives"],
-                    "expected_ingredients": ", ".join(result["expected"]),
-                    "detected_ingredients": ", ".join(result["detected"]),
-                    "missed_ingredients": ", ".join(missed),
-                }
-            )
-
-    print(f"Ground truth evaluation saved to:")
-    print(f"  - {eval_path}")
-    print(f"  - {csv_path}")
+# Ground truth evaluation persisted via ResultsWriter (see food_analyzer/io/results_writer.py).
+# The previous inline implementation was removed in favor of the ResultsWriter abstraction.
 
 
-def load_dynamic_synonyms() -> dict:
-    """Load dynamically discovered synonyms."""
-    synonym_path = Path("dynamic_synonyms.json")
-    if synonym_path.exists():
-        try:
-            with open(synonym_path, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
-
-
-def copy_analysis_to_results(results_dir: Path) -> None:
-    """Copy ground truth analysis to results folder for reference."""
-    analysis_source = Path("ground_truth_analysis.md")
-    if analysis_source.exists():
-        results_dir.mkdir(parents=True, exist_ok=True)
-        analysis_dest = results_dir / "ground_truth_analysis.md"
-        import shutil
-
-        shutil.copy2(analysis_source, analysis_dest)
-        print(f"Analysis report copied to: {analysis_dest}")
+# Copying of analysis report is handled by ResultsWriter.copy_analysis_to_results()
+# (keeps main.py focused on orchestrating inference rather than filesystem details).
 
 
 def run_optimization(args: argparse.Namespace) -> int:
@@ -828,9 +514,27 @@ def compare_results(dirs: list[str], out_path: str | None = None) -> None:
                 data = json.loads(jf.read_text())
             except Exception:
                 continue
-            stem = Path(data.get("image", jf)).stem
-            dets = data.get("detections", [])
-            per_image.setdefault(stem, {})[name] = int(len(dets))
+
+            stem_source = data.get("image") if isinstance(data, dict) else None
+            stem = Path(stem_source or jf).stem
+
+            aggregates: list[dict] = []
+            if isinstance(data, dict):
+                agg = data.get("aggregated", [])
+                if isinstance(agg, list):
+                    aggregates = agg
+
+            if not aggregates and isinstance(data, list):
+                aggregates = data
+
+            total_count = 0
+            for entry in aggregates:
+                try:
+                    total_count += int(entry.get("count", 0))
+                except Exception:
+                    continue
+
+            per_image.setdefault(stem, {})[name] = total_count
     # Print simple table
     headers = ["image"] + dir_names
     print("\n=== Comparison: detections per image ===")

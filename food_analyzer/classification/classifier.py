@@ -37,6 +37,10 @@ class FoodClassifier:
         self.confidence_threshold: float = confidence_threshold
         self.multi_scale: bool = multi_scale
         self.ensemble_weights: list[float] = ensemble_weights or [1.0, 1.0, 1.0]
+        self._has_gpu = self.device.startswith("cuda") and torch.cuda.is_available()
+
+        if not self._has_gpu and self.multi_scale:
+            self.multi_scale = False
 
         # Priority: intelligent labels (from model weights/embeddings) → API fallback
         if intelligent_labels_method:
@@ -105,62 +109,8 @@ class FoodClassifier:
                         "Classifier labels must be provided for ingredient-level zero-shot CLIP."
                     )
                 # Enhanced prompt ensembling for better food/ingredient recognition
-                templates = [
-                    "a photo of {}",
-                    "a high quality photo of {}",
-                    "a close-up food photo of {}",
-                    "a dish containing {}",
-                    "ingredient: {}",
-                    "fresh {}",
-                    "cooked {}",
-                    "raw {}",
-                    "sliced {}",
-                    "{} on a plate",
-                    "organic {}",
-                    "chopped {}",
-                    "diced {}",
-                    "grilled {}",
-                    "baked {}",
-                    "a serving of {}",
-                    "natural {}",
-                    "whole {}",
-                    "food ingredient {}",
-                    "{} ingredient",
-                    "edible {}",
-                    "{} in a bowl",
-                    "{} on the table",
-                    "prepared {}",
-                    "red {}",
-                    "green {}",
-                    "ripe {}",
-                    "{} vegetable",
-                    "{} fruit",
-                    "leafy {}",
-                    "liquid {}",
-                    "{} sauce",
-                    # Additional food-specific templates for better recall
-                    "a portion of {}",
-                    "fresh {} ingredients",
-                    "food with {}",
-                    "meal containing {}",
-                    "plate with {}",
-                    "dish of {}",
-                    "healthy {}",
-                    "culinary ingredient {}",
-                    "cooking with {}",
-                    "nutrition from {}",
-                    "food item: {}",
-                    "edible {} food",
-                    "dietary {}",
-                    "kitchen ingredient {}",
-                    "recipe ingredient {}",
-                    "food component {}",
-                    "visible {}",
-                    "identifiable {}",
-                    "cuisine ingredient {}",
-                    "food preparation with {}",
-                ]
-                with torch.no_grad():
+                templates = self._clip_prompt_templates()
+                with torch.inference_mode():
                     feats = []
                     for t in templates:
                         prompts = [t.format(lbl) for lbl in self.labels]
@@ -212,7 +162,7 @@ class FoodClassifier:
         if getattr(self, "clip_model", None) is not None and hasattr(
             self, "_clip_text_features"
         ):
-            with torch.no_grad():
+            with torch.inference_mode():
                 # Multi-scale test-time augmentation for better recall
                 if self.multi_scale:
                     # Use different crops and augmentations at the same final input size
@@ -338,7 +288,8 @@ class FoodClassifier:
                         return {"label": "unknown", "confidence": float(raw_conf)}
 
         if self.model is not None:
-            with torch.no_grad():
+            tensor = self.preprocess(image)
+            with torch.inference_mode():
                 logits = self.model(tensor.unsqueeze(0).to(self.device))
                 probs = torch.nn.functional.softmax(logits, dim=1)[0]
 
@@ -353,6 +304,67 @@ class FoodClassifier:
 
         # Fail gracefully for unknown items
         return {"label": "unknown", "confidence": 0.0}
+
+    def _clip_prompt_templates(self) -> list[str]:
+        base_templates = [
+            "a photo of {}",
+            "a high quality photo of {}",
+            "a close-up food photo of {}",
+            "a dish containing {}",
+            "ingredient: {}",
+            "fresh {}",
+            "cooked {}",
+            "raw {}",
+            "{} on a plate",
+            "{} ingredient",
+            "{} in a bowl",
+            "prepared {}",
+        ]
+        extended_templates = [
+            "sliced {}",
+            "organic {}",
+            "chopped {}",
+            "diced {}",
+            "grilled {}",
+            "baked {}",
+            "a serving of {}",
+            "natural {}",
+            "whole {}",
+            "food ingredient {}",
+            "edible {}",
+            "{} on the table",
+            "red {}",
+            "green {}",
+            "ripe {}",
+            "{} vegetable",
+            "{} fruit",
+            "leafy {}",
+            "liquid {}",
+            "{} sauce",
+            "a portion of {}",
+            "fresh {} ingredients",
+            "food with {}",
+            "meal containing {}",
+            "plate with {}",
+            "dish of {}",
+            "healthy {}",
+            "culinary ingredient {}",
+            "cooking with {}",
+            "nutrition from {}",
+            "food item: {}",
+            "edible {} food",
+            "dietary {}",
+            "kitchen ingredient {}",
+            "recipe ingredient {}",
+            "food component {}",
+            "visible {}",
+            "identifiable {}",
+            "cuisine ingredient {}",
+            "food preparation with {}",
+        ]
+        if not self._has_gpu:
+            return base_templates
+        return base_templates + extended_templates
 
 
 __all__ = ["FoodClassifier"]

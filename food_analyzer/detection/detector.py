@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 from typing import List
 
 import numpy as np
@@ -78,6 +79,30 @@ class FoodDetector:
         self._sam_predictor = None
         self.fusion_method = (fusion_method or "soft_nms").lower()
         self.soft_nms_sigma = float(max(1e-6, soft_nms_sigma))
+        self._has_gpu = self.device.startswith("cuda") and torch.cuda.is_available()
+
+        if not self._has_gpu:
+            if self.augment or self.tta_imgsz:
+                self.augment = False
+                self.tta_imgsz = []
+            if self.refine_method == "sam":
+                # Fall back to lightweight morphological refinement when GPUs are unavailable
+                self.refine_method = "morph"
+            if self.max_detections > 75:
+                self.max_detections = 75
+
+        self._sam_checkpoint_path: Path | None = None
+        if self.sam_checkpoint:
+            candidate = Path(self.sam_checkpoint)
+            if candidate.exists():
+                self._sam_checkpoint_path = candidate
+            else:
+                warnings.warn(
+                    f"SAM checkpoint not found at {candidate}. Skipping SAM-based refinement."
+                )
+                self.sam_checkpoint = None
+                if self.refine_method == "sam":
+                    self.refine_method = "morph"
 
         try:
             if backend == "mask_rcnn_deeplabv3":
@@ -89,13 +114,16 @@ class FoodDetector:
                 self.model.to(self.device).eval()
 
                 # Load DeepLabV3+ for semantic segmentation
-                semantic_weights = (
-                    segmentation_models.DeepLabV3_ResNet50_Weights.DEFAULT
-                )
-                self.semantic_model = segmentation_models.deeplabv3_resnet50(
-                    weights=semantic_weights
-                )
-                self.semantic_model.to(self.device).eval()
+                if not self._has_gpu:
+                    self.semantic_model = None
+                else:
+                    semantic_weights = (
+                        segmentation_models.DeepLabV3_ResNet50_Weights.DEFAULT
+                    )
+                    self.semantic_model = segmentation_models.deeplabv3_resnet50(
+                        weights=semantic_weights
+                    )
+                    self.semantic_model.to(self.device).eval()
 
                 self.categories = mask_weights.meta.get("categories", self.categories)
             elif backend == "mask_rcnn":
@@ -163,12 +191,13 @@ class FoodDetector:
             return self._sam_predictor
         if SamPredictor is None or sam_model_registry is None:
             return None
-        if not self.sam_checkpoint or not self.sam_model_type:
+        if not self.sam_model_type:
+            return None
+        checkpoint = self._sam_checkpoint_path
+        if checkpoint is None or not checkpoint.exists():
             return None
         try:
-            sam = sam_model_registry[self.sam_model_type](
-                checkpoint=self.sam_checkpoint
-            )
+            sam = sam_model_registry[self.sam_model_type](checkpoint=str(checkpoint))
             sam.to(self.device)
             self._sam_predictor = SamPredictor(sam)
             return self._sam_predictor
@@ -184,7 +213,7 @@ class FoodDetector:
         img_tensor = self.preprocess(image).unsqueeze(0)
         img_tensor = self.semantic_preprocess(img_tensor).to(self.device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             output = self.semantic_model(img_tensor)["out"]
             # Get class predictions
             predictions = torch.softmax(output, dim=1)
@@ -275,7 +304,7 @@ class FoodDetector:
             # Instance segmentation with Mask R-CNN
             tensor = self.preprocess(scaled_image).to(self.device)
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 outputs = self.model([tensor])[0]
 
             # Extract instance masks for this scale
@@ -423,7 +452,7 @@ class FoodDetector:
         # Handle basic Mask R-CNN without overlap filtering
         if self.model is not None and self.backend == "mask_rcnn":
             tensor = self.preprocess(image).to(self.device)
-            with torch.no_grad():
+            with torch.inference_mode():
                 outputs = self.model([tensor])[0]
 
             detections = []
