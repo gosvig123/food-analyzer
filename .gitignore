@@ -2,7 +2,8 @@
 data/
 results/
 models/sam
-
+models
+weights
 # Model files (large binaries)
 *.pt
 # Python
