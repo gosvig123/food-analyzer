@@ -19,14 +19,20 @@ class DepthEstimator:
         self.transform = None
 
         try:
-            self.model = torch.hub.load(
-                "intel-isl/MiDaS", "MiDaS_small", trust_repo=True
-            )
-            self.model.to(self.device).eval()
-            transforms = torch.hub.load(
-                "intel-isl/MiDaS", "transforms", trust_repo=True
-            )
-            self.transform = transforms.small_transform
+            # Suppress the misleading "Loading weights: None" message from MiDaS
+            import io
+            import sys
+            from contextlib import redirect_stdout
+
+            with redirect_stdout(io.StringIO()):
+                self.model = torch.hub.load(
+                    "intel-isl/MiDaS", "MiDaS_small", trust_repo=True
+                )
+                self.model.to(self.device).eval()
+                transforms = torch.hub.load(
+                    "intel-isl/MiDaS", "transforms", trust_repo=True
+                )
+                self.transform = transforms.small_transform
         except Exception as exc:  # pragma: no cover - best-effort offline fallback
             warnings.warn(f"Depth estimator unavailable, using flat depth map: {exc}")
             self.model = None

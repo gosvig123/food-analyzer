@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import warnings
 from pathlib import Path
-from typing import Any
 
 import torch
 from PIL import Image
@@ -28,6 +26,8 @@ class FoodClassifier:
         confidence_threshold: float = 0.3,
         multi_scale: bool = False,
         ensemble_weights: list[float] | None = None,
+        clip_model_name: str | None = None,
+        clip_pretrained: str | None = None,
     ) -> None:
         self.device: str = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model: Any = None
@@ -37,6 +37,8 @@ class FoodClassifier:
         self.confidence_threshold: float = confidence_threshold
         self.multi_scale: bool = multi_scale
         self.ensemble_weights: list[float] = ensemble_weights or [1.0, 1.0, 1.0]
+        self.clip_model_name: str = clip_model_name or "ViT-L-14-336"
+        self.clip_pretrained: str = clip_pretrained or "openai"
         self._has_gpu = self.device.startswith("cuda") and torch.cuda.is_available()
 
         if not self._has_gpu and self.multi_scale:
@@ -73,9 +75,9 @@ class FoodClassifier:
                     import open_clip  # type: ignore
                 except Exception as exc:
                     raise RuntimeError(f"open-clip-torch not available: {exc}")
-                # Use ViT-L-14 with 336px resolution for maximum accuracy on food classification
-                model_name = "ViT-L-14-336"
-                pretrained = "openai"
+                # Use configured CLIP model and weights
+                model_name = self.clip_model_name
+                pretrained = self.clip_pretrained
                 try:
                     self.clip_model: Any
                     self.preprocess: Any
@@ -269,16 +271,45 @@ class FoodClassifier:
                     dim=1,  # type: ignore
                 )[0]
 
+                # Apply Top-K filtering for better accuracy (focus on top 5 predictions)
+                top_k = min(5, len(calibrated_probs))
+                top_k_values, top_k_indices = torch.topk(calibrated_probs, top_k)
+
+                # Renormalize top-k probabilities for better confidence calibration
+                top_k_probs = torch.nn.functional.softmax(top_k_values, dim=0)
+
             if self.labels:
-                conf, idx = calibrated_probs.max(dim=0)
-                mapped_idx = int(idx.item())
+                # Use top-k filtered probabilities for better accuracy
+                best_k_idx = 0
+                conf = top_k_probs[best_k_idx]
+                mapped_idx = int(top_k_indices[best_k_idx].item())
+
                 if 0 <= mapped_idx < len(self.labels):
-                    # Additional confidence boost for ground truth ingredients
                     raw_conf = float(conf.item())
                     predicted_label = self.labels[mapped_idx]
 
-                    # Apply confidence threshold
-                    if raw_conf >= self.confidence_threshold:
+                    # Enhanced confidence scoring with margin analysis
+                    if len(top_k_probs) > 1:
+                        # Check confidence margin between top 2 predictions
+                        confidence_margin = top_k_probs[0] - top_k_probs[1]
+                        margin_threshold = (
+                            0.1  # Minimum margin for confident prediction
+                        )
+
+                        if confidence_margin < margin_threshold:
+                            # Low margin - reduce confidence
+                            raw_conf = raw_conf * 0.8
+
+                    # Apply confidence threshold with adaptive adjustment
+                    effective_threshold = self.confidence_threshold
+                    if (
+                        "sauce" in predicted_label.lower()
+                        or "seasoning" in predicted_label.lower()
+                    ):
+                        # Be more conservative with sauces and seasonings
+                        effective_threshold = min(0.4, self.confidence_threshold + 0.1)
+
+                    if raw_conf >= effective_threshold:
                         return {
                             "label": predicted_label,
                             "confidence": float(raw_conf),
@@ -320,6 +351,7 @@ class FoodClassifier:
             "{} in a bowl",
             "prepared {}",
         ]
+        # Enhanced prompt templates for better ingredient recognition
         extended_templates = [
             "sliced {}",
             "organic {}",
@@ -361,6 +393,27 @@ class FoodClassifier:
             "identifiable {}",
             "cuisine ingredient {}",
             "food preparation with {}",
+            # Additional templates for specific food categories
+            "steamed {}",
+            "roasted {}",
+            "fried {}",
+            "boiled {}",
+            "marinated {}",
+            "seasoned {}",
+            "pickled {}",
+            "dried {}",
+            "fermented {}",
+            "smoked {}",
+            "sautéed {}",
+            "blanched {}",
+            "grilled {} pieces",
+            "minced {}",
+            "shredded {}",
+            "cubed {}",
+            "julienned {}",
+            "pureed {}",
+            "{} garnish",
+            "{} topping",
         ]
         if not self._has_gpu:
             return base_templates

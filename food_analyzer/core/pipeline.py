@@ -69,16 +69,34 @@ class FoodInferencePipeline:
                 }
             else:
                 classification = self.classifier(crop)
+
             label = str(classification.get("label", detection.label))
             label_conf = float(classification.get("confidence", 1.0))
-            analyzed.append(
-                AnalyzedFood(
-                    label=label,
-                    confidence=float(min(detection.confidence, label_conf)),
-                    box=detection.box,
-                    mask_polygon=detection.mask_polygon,
+
+            # Enhanced confidence combination with weighted scoring
+            detection_weight = 0.3  # Detection confidence contributes 30%
+            classification_weight = 0.7  # Classification confidence contributes 70%
+
+            # Use harmonic mean for better balance when one confidence is very low
+            if detection.confidence > 0 and label_conf > 0:
+                combined_confidence = (
+                    detection_weight * detection.confidence
+                    + classification_weight * label_conf
                 )
-            )
+            else:
+                combined_confidence = min(detection.confidence, label_conf)
+
+            # Skip very low confidence detections to reduce noise
+            min_combined_confidence = 0.1
+            if combined_confidence >= min_combined_confidence and label != "unknown":
+                analyzed.append(
+                    AnalyzedFood(
+                        label=label,
+                        confidence=float(combined_confidence),
+                        box=detection.box,
+                        mask_polygon=detection.mask_polygon,
+                    )
+                )
         return analyzed
 
 

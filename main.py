@@ -21,6 +21,7 @@ from food_analyzer.detection.detector import FoodDetector
 # Results I/O is handled by a dedicated helper (keeps main.py focused on orchestration)
 from food_analyzer.io.results_writer import ResultsWriter
 from food_analyzer.utils.config import load_config, resolve_path_relative_to_project
+from food_analyzer.utils.ingredient_filter import IngredientFilter
 from food_analyzer.utils.labels import (
     LabelNormalizer,
     align_ground_truth_with_labels,
@@ -122,6 +123,8 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
     )
 
     classifier_cfg = cfg.get("classifier", {})
+    models_cfg = cfg.get("models", {})
+    clip_cfg = models_cfg.get("clip", {})
     dynamic_labels_source = classifier_cfg.get("dynamic_labels_source")
     intelligent_labels_method = classifier_cfg.get("intelligent_labels_method")
     classifier = FoodClassifier(
@@ -133,6 +136,8 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
         confidence_threshold=classifier_cfg.get("confidence_threshold", 0.3),
         multi_scale=classifier_cfg.get("multi_scale", False),
         ensemble_weights=classifier_cfg.get("ensemble_weights", [1.0, 1.0, 1.0]),
+        clip_model_name=clip_cfg.get("name", "ViT-L-14-336"),
+        clip_pretrained=clip_cfg.get("pretrained", "openai"),
     )
 
     depth_enabled = bool(cfg.get("depth", {}).get("enabled", True))
@@ -172,6 +177,9 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
         save_crops=save_crops,
         save_masks=save_masks,
     )
+
+    # Create ingredient filter to remove non-ingredients
+    ingredient_filter = IngredientFilter()
 
     images = list(iter_image_paths(target_dir, exts))
     if not images:
@@ -216,6 +224,9 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
             print("No detections")
             continue
 
+        # Filter out non-ingredients (containers, dishes, etc.)
+        results = ingredient_filter.filter_results(results)
+
         results.sort(key=lambda item: float(item.get("confidence", 0.0)), reverse=True)
         print(f"\n=== {image_path} ===")
         print("Top detections (sorted by confidence):")
@@ -225,6 +236,8 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
             print(format_result_row(idx, result))
 
         aggregates = aggregate_results(results)
+        # Apply ingredient filtering to aggregated results as well
+        aggregates = ingredient_filter.filter_aggregated_results(aggregates)
         print("\nAggregated summary:")
         for entry in aggregates:
             print(format_aggregate_row(entry))

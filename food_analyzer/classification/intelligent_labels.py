@@ -146,6 +146,12 @@ class IntelligentLabelExtractor:
         if cleaned in self.config.generic_terms:
             return None
 
+        # Filter out non-ingredient terms (containers, dishes, utensils, etc.)
+        non_ingredient_terms = getattr(self.config, "non_ingredient_terms", [])
+        for term in non_ingredient_terms:
+            if term in cleaned or cleaned in term:
+                return None
+
         return cleaned
 
     def get_intelligent_labels(self, method: str = "hybrid") -> List[str]:

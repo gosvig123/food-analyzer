@@ -220,29 +220,32 @@ class FoodDetector:
             pred_classes = torch.argmax(predictions, dim=1).squeeze().cpu().numpy()
 
         # Extract food-related classes (COCO classes for food items)
+        # Updated with more specific food classes and reduced non-food items
         food_classes = {
-            47,
-            48,
-            49,
-            50,
-            51,
-            52,
-            53,
-            54,
-            55,
-            56,
-            57,
-            58,
-            59,
-            60,
-            61,
-            62,
-            63,
-            64,
-            65,
-            66,
-            67,
+            47,  # apple
+            48,  # orange
+            49,  # banana
+            50,  # carrot
+            51,  # hot dog
+            52,  # pizza
+            53,  # donut
+            54,  # cake
+            55,  # chair (excluded)
+            56,  # couch (excluded)
+            57,  # potted plant (excluded)
+            58,  # bed (excluded)
+            59,  # dining table (excluded)
+            60,  # toilet (excluded)
+            61,  # tv (excluded)
+            62,  # laptop (excluded)
+            63,  # mouse (excluded)
+            64,  # remote (excluded)
+            65,  # keyboard (excluded)
+            66,  # cell phone (excluded)
+            67,  # microwave (excluded)
         }
+        # Refined food-only classes
+        food_classes = {47, 48, 49, 50, 51, 52, 53, 54}
         masks = []
 
         for food_class in food_classes:
@@ -388,11 +391,29 @@ class FoodDetector:
                         except Exception:
                             pass
 
-                    # Dynamic confidence based on semantic mask quality
+                    # Enhanced confidence scoring based on mask quality and size
                     mask_area = cv2.contourArea(largest_contour)
                     total_area = sem_mask.shape[0] * sem_mask.shape[1]
                     area_ratio = mask_area / total_area
-                    confidence = min(0.8, max(0.4, 0.5 + area_ratio))
+
+                    # Improved confidence calculation with size and shape analysis
+                    bbox_area = w * h
+                    aspect_ratio = max(w, h) / max(min(w, h), 1)
+
+                    # Base confidence from area ratio
+                    base_confidence = 0.5 + (area_ratio * 0.3)
+
+                    # Penalty for extreme aspect ratios (likely non-food objects)
+                    if aspect_ratio > 3.0:
+                        base_confidence *= 0.7
+
+                    # Bonus for reasonable food-sized objects
+                    if 500 < bbox_area < 50000:
+                        base_confidence *= 1.1
+                    elif bbox_area < 200:  # Too small, likely noise
+                        base_confidence *= 0.5
+
+                    confidence = min(0.8, max(0.3, base_confidence))
 
                     additional_detections.append(
                         Detection(

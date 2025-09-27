@@ -1,45 +1,56 @@
 {
   "detector": {
     "backend": "mask_rcnn_deeplabv3",
-    "model_name": null,
-    "score_threshold": 0.001,
-    "iou_threshold": 0.3,
+    "score_threshold": 0.12,
+    "iou_threshold": 0.25,
     "max_detections": 200,
     "device": null,
-    "imgsz": 1536,
-    "retina_masks": true,
     "augment": true,
-    "tta_imgsz": [1280, 1536, 1792],
     "refine_masks": true,
     "refine_method": "sam",
-    "morph_kernel": 7,
-    "morph_iters": 3,
-    "sam_checkpoint": "models/sam/sam_vit_b_01ec64.pth",
+    "sam_checkpoint": "weights/sam_vit_b_01ec64.pth",
     "sam_model_type": "vit_b",
     "fusion_method": "soft_nms",
-    "soft_nms_sigma": 0.2
+    "soft_nms_sigma": 0.3
   },
   "classifier": {
     "backend": "clip_zeroshot",
     "device": null,
     "dynamic_labels_source": "usda",
-    "intelligent_labels_method": "clip",
-    "temperature": 0.8,
-    "confidence_threshold": 0.1,
+    "intelligent_labels_method": "hybrid",
+    "temperature": 0.6,
+    "confidence_threshold": 0.08,
     "multi_scale": true,
-    "ensemble_weights": [1.0, 1.3, 1.1, 0.9]
+    "ensemble_weights": [1.4, 1.1, 0.9]
+  },
+  "models": {
+    "clip": {
+      "name": "ViT-L-14-336",
+      "pretrained": "openai",
+      "embedding_threshold": 0.65,
+      "max_results": 500
+    },
+    "efficientnet": {
+      "name": "efficientnet_b4",
+      "pretrained": null,
+      "embedding_threshold": 0.6,
+      "max_results": 600
+    }
+  },
+  "volume": {
+    "grams_for_full_plate": 350.0
   },
   "depth": {
-    "enabled": false
+    "enabled": true
   },
   "pipeline": {
     "use_detector_labels": false
   },
   "io": {
-    "image_extensions": [".jpg", ".jpeg", ".png", ".bmp", ".gif"],
+    "image_extensions": [".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"],
     "results_dir": "results",
     "save_overlays": true,
-    "save_crops": true,
-    "save_masks": false
+    "save_crops": false,
+    "save_masks": true
   }
 }
