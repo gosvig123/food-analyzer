@@ -11,7 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Set
 
-from PIL import Image, ImageDraw, UnidentifiedImageError
+from PIL import UnidentifiedImageError
 
 from food_analyzer.classification.classifier import FoodClassifier
 from food_analyzer.core.pipeline import FoodInferencePipeline
