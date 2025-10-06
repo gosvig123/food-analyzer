@@ -16,6 +16,8 @@ from typing import Dict, Iterable, List
 
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
+from food_analyzer.io.html_report import HTMLReportGenerator
+
 
 class ResultsWriter:
     """Encapsulates writing inference results and visual artifacts.
@@ -228,7 +230,11 @@ class ResultsWriter:
                 continue
 
             try:
-                bbox_crop = image.crop(tuple(int(v) for v in box))
+                box_list = [int(v) for v in box]
+                if len(box_list) == 4:
+                    bbox_crop = image.crop((box_list[0], box_list[1], box_list[2], box_list[3]))
+                else:
+                    continue
             except Exception:
                 continue
 
@@ -412,6 +418,20 @@ class ResultsWriter:
         print(f"Ground truth evaluation saved to:")
         print(f"  - {eval_path}")
         print(f"  - {csv_path}")
+        
+        self._generate_html_report(validation_results, evaluation_report)
+
+    def _generate_html_report(self, validation_results: List[Dict], evaluation_report: Dict) -> None:
+        html_path = self.results_dir / "evaluation_report.html"
+        
+        try:
+            generator = HTMLReportGenerator(self.results_dir)
+            html_content = generator.generate(validation_results, evaluation_report)
+            with html_path.open("w", encoding="utf-8") as f:
+                f.write(html_content)
+            print(f"  - {html_path}")
+        except Exception as exc:
+            warnings.warn(f"Failed to generate HTML report: {exc}")
 
     def copy_analysis_to_results(self) -> None:
         """Copy optional analysis report into the results directory (if present)."""
