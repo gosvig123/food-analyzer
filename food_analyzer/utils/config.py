@@ -39,6 +39,7 @@ DEFAULTS: Dict[str, Any] = {
     },
     "pipeline": {
         "use_detector_labels": False,
+        "maximize_recall": False,
     },
     "io": {
         "image_extensions": [".jpg", ".jpeg", ".png", ".bmp", ".gif"],

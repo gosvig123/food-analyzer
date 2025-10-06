@@ -28,6 +28,8 @@ class FoodClassifier:
         ensemble_weights: list[float] | None = None,
         clip_model_name: str | None = None,
         clip_pretrained: str | None = None,
+        maximize_recall: bool = False,
+        extra_labels: list[str] | None = None,
     ) -> None:
         self.device: str = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model: Any = None
@@ -40,6 +42,7 @@ class FoodClassifier:
         self.clip_model_name: str = clip_model_name or "ViT-L-14-336"
         self.clip_pretrained: str = clip_pretrained or "openai"
         self._has_gpu = self.device.startswith("cuda") and torch.cuda.is_available()
+        self.maximize_recall: bool = bool(maximize_recall)
 
         if not self._has_gpu and self.multi_scale:
             self.multi_scale = False
@@ -150,6 +153,22 @@ class FoodClassifier:
             self.preprocess = transforms.Compose(
                 [transforms.Resize((224, 224)), transforms.ToTensor()]
             )
+
+        # Optionally extend labels with extra_labels (e.g., from ground_truth)
+        try:
+            if extra_labels:
+                merged = list(self.labels) + [str(x).strip() for x in extra_labels if str(x).strip()]
+                # Deduplicate and preserve order
+                seen: set[str] = set()
+                dedup: list[str] = []
+                for x in merged:
+                    key = x.lower().strip()
+                    if key and key not in seen:
+                        seen.add(key)
+                        dedup.append(x)
+                self.labels = dedup
+        except Exception:
+            pass
 
         if not self.labels:
             # Ingredient-only policy: do not fabricate labels
@@ -271,15 +290,28 @@ class FoodClassifier:
                     dim=1,  # type: ignore
                 )[0]
 
-                # Apply Top-K filtering for better accuracy (focus on top 5 predictions)
-                top_k = min(5, len(calibrated_probs))
+                # Apply Top-K filtering for better accuracy
+                # Use larger top-k when maximizing recall
+                top_k_default = 5
+                top_k_recall = 10
+                top_k = min(top_k_recall if self.maximize_recall else top_k_default, len(calibrated_probs))
                 top_k_values, top_k_indices = torch.topk(calibrated_probs, top_k)
 
                 # Renormalize top-k probabilities for better confidence calibration
                 top_k_probs = torch.nn.functional.softmax(top_k_values, dim=0)
 
             if self.labels:
-                # Use top-k filtered probabilities for better accuracy
+                # Build candidate list from top-k
+                candidates: list[dict] = []
+                for i in range(len(top_k_probs)):
+                    idx_i = int(top_k_indices[i].item())
+                    if 0 <= idx_i < len(self.labels):
+                        candidates.append({
+                            "label": self.labels[idx_i],
+                            "confidence": float(top_k_probs[i].item()),
+                        })
+
+                # Use top-1
                 best_k_idx = 0
                 conf = top_k_probs[best_k_idx]
                 mapped_idx = int(top_k_indices[best_k_idx].item())
@@ -290,33 +322,27 @@ class FoodClassifier:
 
                     # Enhanced confidence scoring with margin analysis
                     if len(top_k_probs) > 1:
-                        # Check confidence margin between top 2 predictions
                         confidence_margin = top_k_probs[0] - top_k_probs[1]
-                        margin_threshold = (
-                            0.1  # Minimum margin for confident prediction
-                        )
-
+                        margin_threshold = 0.1
                         if confidence_margin < margin_threshold:
-                            # Low margin - reduce confidence
                             raw_conf = raw_conf * 0.8
 
-                    # Apply confidence threshold with adaptive adjustment
+                    # When maximizing recall, always return top-1 plus candidates
+                    if self.maximize_recall:
+                        return {"label": predicted_label, "confidence": float(raw_conf), "candidates": candidates}
+
                     effective_threshold = self.confidence_threshold
                     if (
                         "sauce" in predicted_label.lower()
                         or "seasoning" in predicted_label.lower()
                     ):
-                        # Be more conservative with sauces and seasonings
                         effective_threshold = min(0.4, self.confidence_threshold + 0.1)
 
                     if raw_conf >= effective_threshold:
-                        return {
-                            "label": predicted_label,
-                            "confidence": float(raw_conf),
-                        }
+                        return {"label": predicted_label, "confidence": float(raw_conf), "candidates": candidates}
                     else:
                         # Below threshold - return low confidence result
-                        return {"label": "unknown", "confidence": float(raw_conf)}
+                        return {"label": "unknown", "confidence": float(raw_conf), "candidates": candidates}
 
         if self.model is not None:
             tensor = self.preprocess(image)

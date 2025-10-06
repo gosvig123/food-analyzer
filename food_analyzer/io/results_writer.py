@@ -48,12 +48,14 @@ class ResultsWriter:
     # -----------------------------
     # JSON / CSV result writers
     # -----------------------------
-    def write_results(self, image_path: Path, aggregates: List[dict]) -> None:
-        """Write a per-image JSON payload containing aggregated summaries only."""
-        payload = {
+    def write_results(self, image_path: Path, aggregates: List[dict], dish_first: dict | None = None) -> None:
+        """Write a per-image JSON payload containing aggregated summaries and optional dish-first metadata."""
+        payload: dict = {
             "image": str(image_path),
             "aggregated": aggregates,
         }
+        if dish_first is not None:
+            payload["dish_first"] = dish_first
         output_path = self.results_dir / f"{image_path.stem}.json"
         try:
             with output_path.open("w", encoding="utf-8") as handle:

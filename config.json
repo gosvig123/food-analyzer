@@ -1,9 +1,9 @@
 {
   "detector": {
     "backend": "mask_rcnn_deeplabv3",
-    "score_threshold": 0.12,
-    "iou_threshold": 0.25,
-    "max_detections": 200,
+    "score_threshold": 0.08,
+    "iou_threshold": 0.20,
+    "max_detections": 300,
     "device": null,
     "augment": true,
     "refine_masks": true,
@@ -18,8 +18,8 @@
     "device": null,
     "dynamic_labels_source": "usda",
     "intelligent_labels_method": "hybrid",
-    "temperature": 0.6,
-    "confidence_threshold": 0.08,
+    "temperature": 0.5,
+    "confidence_threshold": 0.01,
     "multi_scale": true,
     "ensemble_weights": [1.4, 1.1, 0.9]
   },
@@ -37,6 +37,36 @@
       "max_results": 600
     }
   },
+  "dish_first": {
+    "enabled": true,
+    "dish_classifier": {
+      "backend": "clip_zeroshot",
+      "labels_path": "dish_labels.json",
+      "topk": 5,
+      "min_conf": 0.05,
+      "model_name": "ViT-L-14-336",
+      "pretrained": "openai"
+    },
+    "priors": {
+      "source": "file",
+      "path": "priors/dish_to_ingredient.json"
+    },
+    "refine": {
+      "enabled": true,
+      "alpha_like": 1.5,
+      "max_topk": 5
+    },
+    "reweighting": {
+      "method": "boost",
+      "alpha": 2.5,
+      "temperature": 0.8,
+      "min_secondary_conf": 0.05,
+      "max_secondary": 5
+    },
+    "grams": {
+      "enabled": false
+    }
+  },
   "volume": {
     "grams_for_full_plate": 350.0
   },
@@ -44,7 +74,8 @@
     "enabled": true
   },
   "pipeline": {
-    "use_detector_labels": false
+    "use_detector_labels": false,
+    "maximize_recall": true
   },
   "io": {
     "image_extensions": [".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"],

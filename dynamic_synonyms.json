@@ -1,0 +1,86 @@
+{
+  "ground beef": "beef",
+  "minced beef": "beef",
+  "steak": "beef",
+  "beef mince": "beef",
+  "carne": "beef",
+  
+  "pasta": "noodles",
+  "ramen": "noodles",
+  "rice noodles": "noodles",
+  "egg noodles": "noodles",
+  "spaghetti": "noodles",
+  "linguine": "noodles",
+  "fettuccine": "noodles",
+  "udon": "noodles",
+  "soba": "noodles",
+  "vermicelli": "noodles",
+  
+  "cheddar": "cheese",
+  "mozzarella": "cheese",
+  "parmesan": "cheese",
+  "feta": "cheese",
+  "gouda": "cheese",
+  "swiss": "cheese",
+  "brie": "cheese",
+  "provolone": "cheese",
+  
+  "green onion": "scallions",
+  "spring onion": "scallions",
+  "green onions": "scallions",
+  
+  "cilantro": "coriander",
+  "chinese parsley": "coriander",
+  
+  "shrimp": "seafood",
+  "prawns": "seafood",
+  "mussels": "seafood",
+  "clams": "seafood",
+  "squid": "seafood",
+  "octopus": "seafood",
+  "crab": "seafood",
+  "lobster": "seafood",
+  "fish": "seafood",
+  "tuna": "seafood",
+  
+  "jalapeño": "pepper",
+  "jalapeno": "pepper",
+  "habanero": "pepper",
+  "serrano": "pepper",
+  "poblano": "pepper",
+  
+  "soya sauce": "soy sauce",
+  "shoyu": "soy sauce",
+  "tamari": "soy sauce",
+  
+  "tortilla": "flour",
+  "tortillas": "flour",
+  "wrap": "flour",
+  "flatbread": "flour",
+  
+  "chickpeas": "beans",
+  "garbanzo": "beans",
+  "kidney beans": "beans",
+  "black beans": "beans",
+  "pinto beans": "beans",
+  "lentil": "lentils",
+  
+  "sesame seeds": "sesame",
+  "sesame oil": "sesame",
+  
+  "peanut": "peanuts",
+  "groundnuts": "peanuts",
+  
+  "bean sprout": "bean sprouts",
+  "sprouts": "bean sprouts",
+  
+  "chili sauce": "salsa",
+  "hot sauce": "salsa",
+  "pico de gallo": "salsa",
+  
+  "greek yogurt": "yogurt",
+  "yoghurt": "yogurt",
+  
+  "scallion": "scallions",
+  "green onions": "scallions"
+}

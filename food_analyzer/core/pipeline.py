@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 from ..classification.classifier import FoodClassifier
 from ..detection.depth import DepthEstimator
 from ..detection.detector import FoodDetector
-from .types import AnalyzedFood, Detection, ImageInput
+from .types import AnalyzedFood, ImageInput
 
 
 class FoodInferencePipeline:
@@ -22,11 +22,13 @@ class FoodInferencePipeline:
         classifier: FoodClassifier | None = None,
         depth_estimator: DepthEstimator | None = None,
         use_detector_labels: bool = False,
+        maximize_recall: bool = False,
     ) -> None:
         self.detector = detector or FoodDetector()
         self.classifier = classifier or FoodClassifier()
         self.depth_estimator = depth_estimator or DepthEstimator()
         self.use_detector_labels = use_detector_labels
+        self.maximize_recall = bool(maximize_recall)
 
     def analyze(self, image_input: ImageInput) -> List[AnalyzedFood]:
         image = _load_image(image_input)
@@ -72,6 +74,7 @@ class FoodInferencePipeline:
 
             label = str(classification.get("label", detection.label))
             label_conf = float(classification.get("confidence", 1.0))
+            candidates = classification.get("candidates") if isinstance(classification, dict) else None
 
             # Enhanced confidence combination with weighted scoring
             detection_weight = 0.3  # Detection confidence contributes 30%
@@ -86,8 +89,8 @@ class FoodInferencePipeline:
             else:
                 combined_confidence = min(detection.confidence, label_conf)
 
-            # Skip very low confidence detections to reduce noise
-            min_combined_confidence = 0.1
+            # Skip very low confidence detections to reduce noise unless maximizing recall
+            min_combined_confidence = 0.0 if self.maximize_recall else 0.1
             if combined_confidence >= min_combined_confidence and label != "unknown":
                 analyzed.append(
                     AnalyzedFood(
@@ -95,6 +98,7 @@ class FoodInferencePipeline:
                         confidence=float(combined_confidence),
                         box=detection.box,
                         mask_polygon=detection.mask_polygon,
+                        candidates=candidates if isinstance(candidates, list) else None,
                     )
                 )
         return analyzed

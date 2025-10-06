@@ -29,3 +29,4 @@ class AnalyzedFood:
     confidence: float
     box: Tuple[int, int, int, int]
     mask_polygon: list[tuple[float, float]] | None = None
+    candidates: list[dict] | None = None

@@ -1,18 +1,19 @@
 {
-  "breakfast_plate": ["tomato", "eggs", "flour", "lettuce"],
-  "buddha_bowl": [
-    "avocado",
-    "tomato",
-    "lettuce",
-    "lentils",
-    "sweet potato",
-    "onion",
-    "dressing"
-  ],
-  "curry_rice": ["spinach", "rice", "carrot", "sauce"],
-  "ramen_bowl": ["eggs", "green pepper", "tomato", "seeds", "noodles"],
-  "stir_fry": ["rice", "carrot", "peas"],
-  "sushi_platter": ["salmon", "avocado", "seaweed", "soy sauce"],
-  "tacos": ["beef", "lime"],
-  "pizza": ["cheese", "tomato"]
+  "beef_biryani": ["rice", "beef", "onion", "carrot"],
+  "bibimbap": ["rice", "beef", "carrot", "spinach", "eggs"],
+  "breakfast_plate": ["tomato", "eggs", "bread"],
+  "buddha_bowl": ["avocado", "tomato", "lettuce", "sweet potato", "quinoa"],
+  "cobb_salad": ["lettuce", "chicken", "eggs", "avocado", "tomato"],
+  "curry_rice": ["rice", "carrot", "chicken", "potato"],
+  "lasagna": ["pasta", "beef", "tomato", "cheese"],
+  "nachos": ["cheese", "beef", "beans", "tomato", "corn"],
+  "pad_thai": ["noodles", "peanuts", "eggs", "lime", "bean sprouts"],
+  "paella": ["rice", "seafood", "bell pepper", "peas", "tomato"],
+  "pho": ["noodles", "beef", "lime", "bean sprouts"],
+  "pizza": ["cheese", "tomato"],
+  "poke_salmon": ["salmon", "rice", "avocado", "cucumber"],
+  "ramen_bowl": ["noodles", "eggs", "pork", "corn", "green pepper"],
+  "stir_fry": ["rice", "carrot", "broccoli", "bell pepper"],
+  "sushi_platter": ["salmon", "rice", "avocado", "cucumber"],
+  "tacos": ["beef", "cheese", "lettuce", "tomato"]
 }

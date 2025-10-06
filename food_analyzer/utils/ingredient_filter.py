@@ -20,82 +20,39 @@ class IngredientFilter:
 
         # Enhanced filter patterns with better precision
         self.filter_patterns = {
-            # Containers and utensils
-            "bowl",
-            "plate",
-            "dish",
-            "cup",
-            "glass",
-            "bottle",
-            "container",
-            "spoon",
-            "fork",
-            "knife",
-            "utensil",
-            "pot",
-            "pan",
-            "tray",
-            "platter",
-            "mug",
-            "pitcher",
-            "jar",
-            "cutting board",
-            "chopping board",
+            # Containers and utensils - NEVER ingredients
+            "bowl", "soup bowl", "plate", "dish", "cup", "glass", "bottle",
+            "container", "spoon", "fork", "knife", "utensil", "pot", "pan",
+            "tray", "platter", "mug", "pitcher", "jar", "cutting board",
+            "chopping board", "milk can", "eggnog",
+            
             # Prepared dishes (not individual ingredients)
-            "pizza",
-            "burger",
-            "sandwich",
-            "soup",
-            "salad",
-            "stew",
-            "casserole",
-            "cheeseburger",
-            "hot dog",
-            "burrito",
-            "taco",
-            "wrap",
-            "quesadilla",
-            "pasta dish",
-            "fried rice",
-            "curry",
-            "pie",
-            "cake",
-            "bread",
-            "noodles",
-            # Non-food items that might be misclassified
-            "fish",
-            "butterfly",
-            "starfish",
-            "crayfish",
-            "anemone fish",
-            "sulphur butterfly",
-            "cabbage butterfly",
-            "oil filter",
-            "coil",
-            "triceratops",
-            "meat loaf",
-            "sea anemone",
-            "coral",
-            "sponge",
+            "pizza", "burger", "sandwich", "cheeseburger", "hot dog",
+            "burrito", "quesadilla",
+            
+            # Animals and non-food living things - HARD BLOCK
+            "goldfish", "anemone fish", "lionfish", "fish",
+            "butterfly", "sulphur butterfly", "cabbage butterfly",
+            "prairie chicken", "crayfish", "starfish", "jellyfish",
+            "leatherback turtle", "sea anemone", "coral", "sponge",
+            
+            # Dinosaurs and extinct creatures - HARD BLOCK
+            "triceratops", "tyrannosaurus", "stegosaurus", "velociraptor",
+            "brachiosaurus", "pterodactyl",
+            
+            # Objects and non-food items - HARD BLOCK
+            "oil filter", "coil", "toilet seat", "toilet tissue", "toilet paper",
+            "seat", "tissue", "paper towel", "napkin",
+            
+            # Machinery/Industrial
+            "can", "milk can", "oil can", "filter",
+            
             # Generic/vague terms
-            "food",
-            "item",
-            "product",
-            "dish",
-            "meal",
-            "snack",
-            "beverage",
-            "drink",
-            "liquid",
-            "solid",
-            "mixture",
-            "unknown",
+            "food", "item", "product", "meal", "snack", "beverage",
+            "drink", "liquid", "solid", "mixture", "unknown",
+            
             # Background/context items
-            "table",
-            "surface",
-            "background",
-            "texture",
-            "pattern",
+            "table", "surface", "background", "texture", "pattern",
         }
 
     def is_valid_ingredient(self, label: str) -> bool:

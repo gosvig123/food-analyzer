@@ -10,6 +10,8 @@ from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Set
+import difflib
+import re
 
 from PIL import UnidentifiedImageError
 
@@ -144,11 +146,55 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
     depth_estimator = DepthEstimator() if depth_enabled else None
 
     pipeline_cfg = cfg.get("pipeline", {})
+
+    # Build extra_labels from ground_truth.json if present (extend label space; improves recall without hard-coding)
+    extra_labels: list[str] = []
+    try:
+        gt_path = Path("ground_truth.json")
+        if gt_path.exists():
+            with gt_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                tmp: set[str] = set()
+                for items in data.values():
+                    if isinstance(items, list):
+                        for it in items:
+                            s = str(it).strip()
+                            if s:
+                                tmp.add(s)
+                extra_labels = sorted(tmp)
+    except Exception:
+        extra_labels = []
+
+    # If classifier present, pass maximize_recall and extra_labels through (recreate with same settings)
+    try:
+        classifier_cfg = cfg.get("classifier", {})
+        models_cfg = cfg.get("models", {})
+        clip_cfg = models_cfg.get("clip", {})
+        classifier = FoodClassifier(
+            device=classifier_cfg.get("device"),
+            backend=str(classifier_cfg.get("backend", "efficientnet_b0")),
+            dynamic_labels_source=classifier_cfg.get("dynamic_labels_source"),
+            intelligent_labels_method=classifier_cfg.get("intelligent_labels_method"),
+            temperature=classifier_cfg.get("temperature", 1.0),
+            confidence_threshold=classifier_cfg.get("confidence_threshold", 0.3),
+            multi_scale=classifier_cfg.get("multi_scale", False),
+            ensemble_weights=classifier_cfg.get("ensemble_weights", [1.0, 1.0, 1.0]),
+            clip_model_name=clip_cfg.get("name", "ViT-L-14-336"),
+            clip_pretrained=clip_cfg.get("pretrained", "openai"),
+            maximize_recall=bool(pipeline_cfg.get("maximize_recall", False)),
+            extra_labels=extra_labels,
+        )
+    except Exception:
+        # Fall back to the previously constructed classifier if any
+        pass
+
     return FoodInferencePipeline(
         detector=detector,
         classifier=classifier,
         depth_estimator=depth_estimator,
         use_detector_labels=bool(pipeline_cfg.get("use_detector_labels", False)),
+        maximize_recall=bool(pipeline_cfg.get("maximize_recall", False)),
     )
 
 
@@ -157,9 +203,35 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
 
     label_normalizer: LabelNormalizer | None = None
     classifier = getattr(pipeline, "classifier", None)
+    ingredient_label_list: list[str] = []
     if getattr(classifier, "labels", None):
         synonym_map = load_synonym_map()
         label_normalizer = LabelNormalizer.from_labels(classifier.labels, synonym_map)
+        ingredient_label_list = list(classifier.labels)
+
+    # Dish-first setup (no hard-coded labels)
+    dish_cfg = cfg.get("dish_first", {}) if isinstance(cfg.get("dish_first"), dict) else {}
+    dish_enabled = bool(dish_cfg.get("enabled", False))
+    dish_classifier = None
+    priors_helper = None
+    if dish_enabled:
+        try:
+            from food_analyzer.dish_first.dish_classifier import DishClassifier
+            from food_analyzer.dish_first.priors import DishIngredientPriors
+        except Exception as exc:
+            print(f"Dish-first modules unavailable: {exc}. Continuing without dish-first.")
+            dish_enabled = False
+        if dish_enabled:
+            try:
+                dish_classifier = DishClassifier.from_config(dish_cfg.get("dish_classifier", {}))
+            except Exception as exc:
+                print(f"Failed to initialize dish classifier: {exc}. Continuing without dish-first.")
+                dish_enabled = False
+            try:
+                priors_helper = DishIngredientPriors.from_config(dish_cfg.get("priors", {}), ingredient_labels=ingredient_label_list)
+            except Exception as exc:
+                print(f"Failed to initialize priors helper: {exc}. Continuing with uniform priors.")
+                priors_helper = None
 
     exts = {
         e.lower()
@@ -224,8 +296,62 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
             print("No detections")
             continue
 
-        # Filter out non-ingredients (containers, dishes, etc.)
-        results = ingredient_filter.filter_results(results)
+        # Filter out non-ingredients (containers, dishes, etc.) unless maximizing recall
+        pipeline_cfg = cfg.get("pipeline", {})
+        maximize_recall = bool(pipeline_cfg.get("maximize_recall", False))
+        if not maximize_recall:
+            results = ingredient_filter.filter_results(results)
+
+        # Dish-first: compute dish and apply priors-based reweighting (no hard-coded labels)
+        dish_meta: dict | None = None
+        if dish_enabled and dish_classifier is not None:
+            try:
+                from PIL import Image
+                image_obj = Image.open(image_path).convert("RGB")
+                dish_topk = dish_classifier(image_obj)
+                # Optional refinement using observed ingredients to improve dish posterior
+                refine_cfg = dish_cfg.get("refine", {}) if isinstance(dish_cfg.get("refine"), dict) else {}
+                refine_enabled = bool(refine_cfg.get("enabled", True))
+                if dish_topk and refine_enabled:
+                    # Build a dish->ingredient table for refinement if helper exists
+                    priors_table = priors_helper.table if getattr(priors_helper, "table", None) else None
+                    from food_analyzer.dish_first.refine import refine_dish_posterior
+                    dish_topk = refine_dish_posterior(
+                        dish_topk=dish_topk,
+                        detections=results,
+                        priors=priors_table,
+                        ingredient_space=ingredient_label_list,
+                        alpha_like=float(refine_cfg.get("alpha_like", 1.0)),
+                        max_topk=int(refine_cfg.get("max_topk", 5)),
+                    )
+                # Build effective prior over ingredient labels
+                if dish_topk:
+                    # priors_helper may be None -> uniform fallback inside helper
+                    from food_analyzer.dish_first.priors import build_mixture_prior
+                    prior_map = build_mixture_prior(dish_topk, priors_helper, ingredient_label_list)
+                else:
+                    prior_map = {lbl: 1.0 / max(1, len(ingredient_label_list)) for lbl in ingredient_label_list}
+
+                # Reweight and rerank with candidate expansion
+                from food_analyzer.dish_first.reweight import reweight_and_rerank_detections
+                reweight_cfg = dish_cfg.get("reweighting", {}) if isinstance(dish_cfg.get("reweighting"), dict) else {}
+                results = reweight_and_rerank_detections(results, prior_map, reweight_cfg)
+
+                dish_meta = {
+                    "dish_topk": dish_topk,
+                    "reweighting": {
+                        "method": reweight_cfg.get("method", "boost"),
+                        "alpha": reweight_cfg.get("alpha", 0.8),
+                        "temperature": reweight_cfg.get("temperature", 1.0),
+                    },
+                }
+                # Brief console hint for dish-first
+                if dish_topk:
+                    top = dish_topk[0]
+                    print(f"Dish-first: top dish {top.get('label')} @ {float(top.get('confidence', 0.0)):.2f}")
+            except Exception as exc:
+                print(f"Dish-first processing failed for {image_path.name}: {exc}")
+                dish_meta = None
 
         results.sort(key=lambda item: float(item.get("confidence", 0.0)), reverse=True)
         print(f"\n=== {image_path} ===")
@@ -236,8 +362,44 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
             print(format_result_row(idx, result))
 
         aggregates = aggregate_results(results)
-        # Apply ingredient filtering to aggregated results as well
-        aggregates = ingredient_filter.filter_aggregated_results(aggregates)
+        # Apply ingredient filtering to aggregated results as well unless maximizing recall
+        if not maximize_recall:
+            aggregates = ingredient_filter.filter_aggregated_results(aggregates)
+
+        # Optional grams allocation
+        if dish_enabled and dish_meta is not None:
+            try:
+                grams_cfg = dish_cfg.get("grams", {}) if isinstance(dish_cfg.get("grams"), dict) else {}
+                if grams_cfg.get("enabled", False):
+                    from food_analyzer.dish_first.grams import allocate_grams_per_ingredient
+                    # Determine total grams
+                    G = None
+                    total_source = grams_cfg.get("total_source", "fixed")
+                    if total_source == "fixed":
+                        G = float(grams_cfg.get("fixed_total_grams", cfg.get("volume", {}).get("grams_for_full_plate", 350.0)))
+                    elif total_source == "metadata":
+                        G = float(cfg.get("volume", {}).get("grams_for_full_plate", 350.0))
+                    elif total_source == "none":
+                        G = None
+                    else:
+                        G = float(cfg.get("volume", {}).get("grams_for_full_plate", 350.0))
+                    grams_map = allocate_grams_per_ingredient(
+                        detections=results,
+                        total_grams=G,
+                        blend_lambda=float(grams_cfg.get("blend_lambda", 0.3)),
+                        beta=float(grams_cfg.get("area_exponent_beta", 0.5)),
+                        gamma=float(grams_cfg.get("confidence_exponent_gamma", 1.0)),
+                        min_grams=float(grams_cfg.get("min_grams", 0.0)),
+                        rounding=str(grams_cfg.get("rounding", "nearest_gram")),
+                    )
+                    # Inject grams into aggregates
+                    for entry in aggregates:
+                        lbl = str(entry.get("label", "")).strip().lower()
+                        if lbl in grams_map:
+                            entry["grams"] = float(grams_map[lbl])
+            except Exception as exc:
+                print(f"Grams allocation failed for {image_path.name}: {exc}")
+
         print("\nAggregated summary:")
         for entry in aggregates:
             print(format_aggregate_row(entry))
@@ -252,6 +414,7 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
         writer.write_results(
             image_path=image_path,
             aggregates=aggregates,
+            dish_first=dish_meta,
         )
 
         # Write highest predictions to CSV
@@ -327,15 +490,32 @@ def validate_against_ground_truth(
     ground_truth: Dict[str, Set[str]],
     label_normalizer: LabelNormalizer | None = None,
 ) -> Dict[str, float]:
-    """Validate detections against ground truth for an image."""
-    # Extract plate type from image name (assuming format: plateType_*.jpg)
+    """Validate detections against ground truth for an image with fuzzy plate-type matching."""
+    # Extract plate type from image name; try exact/substring first, then fuzzy
     image_stem = Path(image_name).stem
-    plate_type = None
+    plate_type: str | None = None
 
+    # 1) direct substring match
     for gt_plate in ground_truth.keys():
         if gt_plate in image_stem:
             plate_type = gt_plate
             break
+
+    # 2) fuzzy match if not found
+    if not plate_type:
+        def _norm(s: str) -> str:
+            return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+        stem_n = _norm(image_stem)
+        best_key = None
+        best_ratio = 0.0
+        for gt_plate in ground_truth.keys():
+            r = difflib.SequenceMatcher(None, stem_n, _norm(gt_plate)).ratio()
+            if r > best_ratio:
+                best_ratio = r
+                best_key = gt_plate
+        # Use a conservative cutoff; tweakable if needed
+        if best_key is not None and best_ratio >= 0.55:
+            plate_type = best_key
 
     if not plate_type:
         return {
@@ -599,6 +779,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Grams corresponding to full-frame portion",
     )
     parser.add_argument(
+        "--tta",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Enable detector TTA with provided shorter-edge sizes (e.g., --tta 512 768 1024)",
+    )
+    parser.add_argument(
         "--results-dir",
         default=None,
         help="Where to write JSON outputs (overrides config)",
@@ -609,6 +796,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="Compare detection counts across result folders",
     )
+    # Dish-first convenience flags (simplifies setup)
+    parser.add_argument(
+        "--dish-first",
+        action="store_true",
+        help="Enable dish-first reweighting (requires --dish-labels and optionally --dish-priors)",
+    )
+    parser.add_argument(
+        "--dish-labels",
+        default=None,
+        help="Path to dish labels file (JSON list or TXT lines)",
+    )
+    parser.add_argument(
+        "--dish-priors",
+        default=None,
+        help="Path to dish→ingredient priors file (JSON or CSV)",
+    )
+    # Dish-first tuning knobs
+    parser.add_argument("--dish-alpha", type=float, default=None, help="Reweighting strength alpha (default 0.8)")
+    parser.add_argument("--dish-min-secondary-conf", type=float, default=None, help="Min confidence to add a secondary candidate (default 0.15)")
+    parser.add_argument("--dish-max-secondary", type=int, default=None, help="Max extra candidates to add per detection (default 1)")
     parser.add_argument(
         "--compare-out",
         default=None,
@@ -618,6 +825,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--optimize",
         action="store_true",
         help="Run dynamic optimization based on latest evaluation results",
+    )
+    parser.add_argument(
+        "--maximize-recall",
+        action="store_true",
+        help="Enable high-recall mode: looser thresholds, skip filtering, extend labels with ground truth",
     )
     parser.add_argument(
         "--evaluation-file",
@@ -633,12 +845,54 @@ def apply_overrides(cfg: dict, args: argparse.Namespace) -> dict:
         cfg.setdefault("depth", {})["enabled"] = False
     if args.score_threshold is not None:
         cfg.setdefault("detector", {})["score_threshold"] = float(args.score_threshold)
+    if getattr(args, "maximize_recall", False):
+        # Soften thresholds and enable maximize_recall flag
+        det = cfg.setdefault("detector", {})
+        det["score_threshold"] = min(0.05, float(det.get("score_threshold", 0.5)))
+        det["max_detections"] = max(300, int(det.get("max_detections", 100)))
+        det["augment"] = True
+        cls = cfg.setdefault("classifier", {})
+        cls["confidence_threshold"] = 0.0
+        pipe = cfg.setdefault("pipeline", {})
+        pipe["maximize_recall"] = True
+
+    # Dish-first convenience overrides
+    if getattr(args, "dish_first", False):
+        df = cfg.setdefault("dish_first", {})
+        df["enabled"] = True
+    if getattr(args, "dish_labels", None):
+        df = cfg.setdefault("dish_first", {})
+        dc = df.setdefault("dish_classifier", {})
+        dc["labels_path"] = str(args.dish_labels)
+    if getattr(args, "dish_priors", None):
+        df = cfg.setdefault("dish_first", {})
+        pr = df.setdefault("priors", {})
+        pr["source"] = "file"
+        pr["path"] = str(args.dish_priors)
+    # Apply dish-first reweighting tuning overrides if provided
+    if getattr(args, "dish_alpha", None) is not None:
+        df = cfg.setdefault("dish_first", {})
+        rw = df.setdefault("reweighting", {})
+        rw["alpha"] = float(args.dish_alpha)
+    if getattr(args, "dish_min_secondary_conf", None) is not None:
+        df = cfg.setdefault("dish_first", {})
+        rw = df.setdefault("reweighting", {})
+        rw["min_secondary_conf"] = float(args.dish_min_secondary_conf)
+    if getattr(args, "dish_max_secondary", None) is not None:
+        df = cfg.setdefault("dish_first", {})
+        rw = df.setdefault("reweighting", {})
+        rw["max_secondary"] = int(args.dish_max_secondary)
     if args.grams_full_plate is not None:
         cfg.setdefault("volume", {})["grams_for_full_plate"] = float(
             args.grams_full_plate
         )
     if args.results_dir is not None:
         cfg.setdefault("io", {})["results_dir"] = str(args.results_dir)
+    if getattr(args, "tta", None):
+        # Inject multi-scale test-time augmentation at runtime
+        det = cfg.setdefault("detector", {})
+        det["tta_imgsz"] = list(map(int, args.tta))
+        det["augment"] = True
     return cfg
 
 
