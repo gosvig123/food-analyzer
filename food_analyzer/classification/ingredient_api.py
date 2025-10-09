@@ -8,8 +8,9 @@ import urllib.request
 import warnings
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional, List, Set, Dict, Any
 
-from ..data.ingredient_config import IngredientConfig, load_ingredient_config
+from ..utils.config import IngredientConfig, load_ingredient_config
 
 
 class IngredientLabelFetcher:
@@ -93,22 +94,22 @@ class IngredientLabelFetcher:
             try:
                 # Build query parameters from config
                 params = {
-                    **api_config.params,
+                    **api_config.get("params", {}),
                     "query": category,
-                    "pageSize": api_config.page_size,
+                    "pageSize": api_config.get("page_size", 50),
                 }
 
                 # Encode parameters
                 query_string = urllib.parse.urlencode(params, doseq=True)
-                url = f"{api_config.base_url}?{query_string}"
+                url = f"{api_config.get('base_url')}?{query_string}"
 
                 # Make request
                 req = urllib.request.Request(url)
-                for header, value in api_config.headers.items():
+                for header, value in api_config.get("headers", {}).items():
                     req.add_header(header, value)
 
                 with urllib.request.urlopen(
-                    req, timeout=api_config.timeout
+                    req, timeout=api_config.get("timeout", 10)
                 ) as response:
                     data = json.loads(response.read().decode())
 
@@ -131,7 +132,7 @@ class IngredientLabelFetcher:
                 continue
 
         # Convert to sorted list and limit size
-        ingredients = sorted(list(all_ingredients))[: api_config.max_results]
+        ingredients = sorted(list(all_ingredients))[: api_config.get("max_results", 500)]
         return ingredients if ingredients else self.config.fallback_ingredients
 
     def _fetch_openfoodfacts_ingredients(self) -> List[str]:
@@ -142,21 +143,21 @@ class IngredientLabelFetcher:
 
         try:
             # Build URL with parameters
-            query_string = urllib.parse.urlencode(api_config.params)
-            url = f"{api_config.base_url}?{query_string}"
+            query_string = urllib.parse.urlencode(api_config.get("params", {}))
+            url = f"{api_config.get('base_url')}?{query_string}"
 
             req = urllib.request.Request(url)
-            for header, value in api_config.headers.items():
+            for header, value in api_config.get("headers", {}).items():
                 req.add_header(header, value)
 
-            with urllib.request.urlopen(req, timeout=api_config.timeout) as response:
+            with urllib.request.urlopen(req, timeout=api_config.get("timeout", 15)) as response:
                 data = json.loads(response.read().decode())
 
             # Extract ingredient names
             ingredients = []
             tags = data.get("tags", [])
 
-            for tag in tags[: api_config.max_results]:
+            for tag in tags[: api_config.get("max_results", 500)]:
                 name = tag.get("name", "").strip().lower()
                 if name and len(name.split()) <= 2:  # Keep simple ingredients
                     ingredients.append(name)

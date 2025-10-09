@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from ..data.ingredient_config import IngredientConfig, load_ingredient_config
+from ..utils.config import IngredientConfig, load_ingredient_config
 
 
 class IngredientFilter:

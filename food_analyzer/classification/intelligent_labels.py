@@ -7,7 +7,7 @@ import warnings
 from functools import lru_cache
 from typing import List, Optional, Set
 
-from ..data.ingredient_config import IngredientConfig, load_ingredient_config
+from ..utils.config import IngredientConfig, load_ingredient_config
 
 
 class IntelligentLabelExtractor:
@@ -48,16 +48,18 @@ class IntelligentLabelExtractor:
         if not clip_config:
             return []
 
-        model_name = model_name or clip_config.name
+        effective_model_name = model_name or clip_config.get("name", "ViT-B-32")
+        if not effective_model_name:
+            return []
 
         try:
             import open_clip
             import torch
 
             model, _, preprocess = open_clip.create_model_and_transforms(
-                model_name, pretrained=clip_config.pretrained
+                effective_model_name, pretrained=clip_config.get("pretrained")
             )
-            tokenizer = open_clip.get_tokenizer(model_name)
+            tokenizer = open_clip.get_tokenizer(effective_model_name)
 
             # Use CLIP to find food-related concepts by embedding similarity
             food_concepts = self._generate_food_concept_candidates()
@@ -75,10 +77,10 @@ class IntelligentLabelExtractor:
                 # Filter based on embedding quality (concepts with strong embeddings)
                 for i, concept in enumerate(food_concepts):
                     embedding_norm = text_features[i].norm().item()
-                    if embedding_norm > clip_config.embedding_threshold:
+                    if embedding_norm > clip_config.get("embedding_threshold", 0.8):
                         valid_ingredients.append(concept)
 
-            return valid_ingredients[: clip_config.max_results]
+            return valid_ingredients[: clip_config.get("max_results", 200)]
 
         except Exception as exc:
             warnings.warn(f"Failed to extract CLIP food concepts: {exc}")

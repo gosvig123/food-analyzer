@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import warnings
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 DEFAULTS: Dict[str, Any] = {
     "detector": {
@@ -133,3 +134,50 @@ def resolve_path_relative_to_project(path_str: str | None) -> Optional[Path]:
     if pkg_p.exists():
         return pkg_p
     return p  # return original Path even if not existing, caller may handle
+
+
+@dataclass
+class IngredientConfig:
+    """Configuration for ingredient label fetching."""
+    
+    apis: Dict[str, Any] = field(default_factory=dict)
+    models: Dict[str, Any] = field(default_factory=dict)
+    search_categories: List[str] = field(default_factory=list)
+    food_keywords: Dict[str, List[str]] = field(default_factory=dict)
+    cleaning_patterns: List[str] = field(default_factory=list)
+    generic_terms: List[str] = field(default_factory=list)
+    non_ingredient_terms: List[str] = field(default_factory=list)
+    cache_maxsize: int = 1
+    cache_file: str = "ingredient_cache.json"
+    fallback_ingredients: List[str] = field(default_factory=list)
+
+
+def load_ingredient_config(path: Optional[str | Path] = None) -> IngredientConfig:
+    """Load ingredient configuration from ingredient_config.json."""
+    if path is None:
+        path = Path("ingredient_config.json")
+    else:
+        path = Path(path)
+    
+    if not path.exists():
+        return IngredientConfig()
+    
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        return IngredientConfig(
+            apis=data.get("apis", {}),
+            models=data.get("models", {}),
+            search_categories=data.get("search_categories", []),
+            food_keywords=data.get("food_keywords", {}),
+            cleaning_patterns=data.get("cleaning_patterns", []),
+            generic_terms=data.get("generic_terms", []),
+            non_ingredient_terms=data.get("non_ingredient_terms", []),
+            cache_maxsize=data.get("cache_maxsize", 1),
+            cache_file=data.get("cache_file", "ingredient_cache.json"),
+            fallback_ingredients=data.get("fallback_ingredients", []),
+        )
+    except Exception as exc:
+        warnings.warn(f"Failed to load ingredient config from {path}: {exc}")
+        return IngredientConfig()
