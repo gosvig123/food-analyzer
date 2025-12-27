@@ -1,9 +1,9 @@
-"""Classification utilities to assign semantic labels to detected food items."""
-
 from __future__ import annotations
 
+import json
 import warnings
 from pathlib import Path
+from typing import Any
 
 import torch
 from PIL import Image
@@ -11,6 +11,59 @@ from torchvision import transforms
 
 from .ingredient_api import get_dynamic_ingredient_labels
 from .intelligent_labels import get_intelligent_ingredient_labels
+
+
+# Default prompt templates (used if external file not found)
+_DEFAULT_BASE_TEMPLATES = [
+    "a photo of {}",
+    "a high quality photo of {}",
+    "a close-up food photo of {}",
+    "a dish containing {}",
+    "ingredient: {}",
+    "fresh {}",
+    "cooked {}",
+    "raw {}",
+    "{} on a plate",
+    "{} ingredient",
+    "{} in a bowl",
+    "prepared {}",
+]
+
+_DEFAULT_EXTENDED_TEMPLATES = [
+    "sliced {}",
+    "organic {}",
+    "chopped {}",
+    "grilled {}",
+    "baked {}",
+    "a serving of {}",
+    "whole {}",
+    "food ingredient {}",
+]
+
+
+def _load_prompt_templates(prompts_path: str | None = None) -> tuple[list[str], list[str]]:
+    """Load CLIP prompt templates from external JSON file or use defaults."""
+    if prompts_path:
+        path = Path(prompts_path)
+    else:
+        # Try common locations
+        for candidate in [Path("clip_prompts.json"), Path(__file__).parent.parent.parent / "clip_prompts.json"]:
+            if candidate.exists():
+                path = candidate
+                break
+        else:
+            return _DEFAULT_BASE_TEMPLATES, _DEFAULT_EXTENDED_TEMPLATES
+    
+    if not path.exists():
+        return _DEFAULT_BASE_TEMPLATES, _DEFAULT_EXTENDED_TEMPLATES
+    
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        base = data.get("base_templates", _DEFAULT_BASE_TEMPLATES)
+        extended = data.get("extended_templates", _DEFAULT_EXTENDED_TEMPLATES)
+        return base, extended
+    except Exception:
+        return _DEFAULT_BASE_TEMPLATES, _DEFAULT_EXTENDED_TEMPLATES
 
 
 class FoodClassifier:
@@ -30,6 +83,7 @@ class FoodClassifier:
         clip_pretrained: str | None = None,
         maximize_recall: bool = False,
         extra_labels: list[str] | None = None,
+        prompts_path: str | None = None,
     ) -> None:
         self.device: str = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model: Any = None
@@ -43,6 +97,8 @@ class FoodClassifier:
         self.clip_pretrained: str = clip_pretrained or "openai"
         self._has_gpu = self.device.startswith("cuda") and torch.cuda.is_available()
         self.maximize_recall: bool = bool(maximize_recall)
+        # Load prompt templates from external file or use defaults
+        self._base_templates, self._extended_templates = _load_prompt_templates(prompts_path)
 
         if not self._has_gpu and self.multi_scale:
             self.multi_scale = False
@@ -363,87 +419,10 @@ class FoodClassifier:
         return {"label": "unknown", "confidence": 0.0}
 
     def _clip_prompt_templates(self) -> list[str]:
-        base_templates = [
-            "a photo of {}",
-            "a high quality photo of {}",
-            "a close-up food photo of {}",
-            "a dish containing {}",
-            "ingredient: {}",
-            "fresh {}",
-            "cooked {}",
-            "raw {}",
-            "{} on a plate",
-            "{} ingredient",
-            "{} in a bowl",
-            "prepared {}",
-        ]
-        # Enhanced prompt templates for better ingredient recognition
-        extended_templates = [
-            "sliced {}",
-            "organic {}",
-            "chopped {}",
-            "diced {}",
-            "grilled {}",
-            "baked {}",
-            "a serving of {}",
-            "natural {}",
-            "whole {}",
-            "food ingredient {}",
-            "edible {}",
-            "{} on the table",
-            "red {}",
-            "green {}",
-            "ripe {}",
-            "{} vegetable",
-            "{} fruit",
-            "leafy {}",
-            "liquid {}",
-            "{} sauce",
-            "a portion of {}",
-            "fresh {} ingredients",
-            "food with {}",
-            "meal containing {}",
-            "plate with {}",
-            "dish of {}",
-            "healthy {}",
-            "culinary ingredient {}",
-            "cooking with {}",
-            "nutrition from {}",
-            "food item: {}",
-            "edible {} food",
-            "dietary {}",
-            "kitchen ingredient {}",
-            "recipe ingredient {}",
-            "food component {}",
-            "visible {}",
-            "identifiable {}",
-            "cuisine ingredient {}",
-            "food preparation with {}",
-            # Additional templates for specific food categories
-            "steamed {}",
-            "roasted {}",
-            "fried {}",
-            "boiled {}",
-            "marinated {}",
-            "seasoned {}",
-            "pickled {}",
-            "dried {}",
-            "fermented {}",
-            "smoked {}",
-            "sautéed {}",
-            "blanched {}",
-            "grilled {} pieces",
-            "minced {}",
-            "shredded {}",
-            "cubed {}",
-            "julienned {}",
-            "pureed {}",
-            "{} garnish",
-            "{} topping",
-        ]
+        """Return prompt templates loaded from external config or defaults."""
         if not self._has_gpu:
-            return base_templates
-        return base_templates + extended_templates
+            return self._base_templates
+        return self._base_templates + self._extended_templates
 
 
 __all__ = ["FoodClassifier"]

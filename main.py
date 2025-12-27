@@ -19,6 +19,7 @@ from food_analyzer.classification.classifier import FoodClassifier
 from food_analyzer.core.pipeline import FoodInferencePipeline
 from food_analyzer.detection.depth import DepthEstimator
 from food_analyzer.detection.detector import FoodDetector
+from food_analyzer.nutrition import NutritionEstimator
 
 # Results I/O is handled by a dedicated helper (keeps main.py focused on orchestration)
 from food_analyzer.io.results_writer import ResultsWriter
@@ -122,6 +123,7 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
         sam_model_type=detector_cfg.get("sam_model_type"),
         fusion_method=str(detector_cfg.get("fusion_method", "soft_nms")),
         soft_nms_sigma=float(detector_cfg.get("soft_nms_sigma", 0.5)),
+        semantic_food_classes=detector_cfg.get("semantic_food_classes"),
     )
 
     classifier_cfg = cfg.get("classifier", {})
@@ -140,6 +142,7 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
         ensemble_weights=classifier_cfg.get("ensemble_weights", [1.0, 1.0, 1.0]),
         clip_model_name=clip_cfg.get("name", "ViT-L-14-336"),
         clip_pretrained=clip_cfg.get("pretrained", "openai"),
+        prompts_path=classifier_cfg.get("prompts_path"),
     )
 
     depth_enabled = bool(cfg.get("depth", {}).get("enabled", True))
@@ -184,6 +187,7 @@ def build_pipeline_from_config(cfg: dict) -> FoodInferencePipeline:
             clip_pretrained=clip_cfg.get("pretrained", "openai"),
             maximize_recall=bool(pipeline_cfg.get("maximize_recall", False)),
             extra_labels=extra_labels,
+            prompts_path=classifier_cfg.get("prompts_path"),
         )
     except Exception:
         # Fall back to the previously constructed classifier if any
@@ -209,29 +213,18 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
         label_normalizer = LabelNormalizer.from_labels(classifier.labels, synonym_map)
         ingredient_label_list = list(classifier.labels)
 
-    # Dish-first setup (no hard-coded labels)
-    dish_cfg = cfg.get("dish_first", {}) if isinstance(cfg.get("dish_first"), dict) else {}
-    dish_enabled = bool(dish_cfg.get("enabled", False))
-    dish_classifier = None
-    priors_helper = None
-    if dish_enabled:
-        try:
-            from food_analyzer.dish_first.dish_classifier import DishClassifier
-            from food_analyzer.dish_first.priors import DishIngredientPriors
-        except Exception as exc:
-            print(f"Dish-first modules unavailable: {exc}. Continuing without dish-first.")
-            dish_enabled = False
-        if dish_enabled:
-            try:
-                dish_classifier = DishClassifier.from_config(dish_cfg.get("dish_classifier", {}))
-            except Exception as exc:
-                print(f"Failed to initialize dish classifier: {exc}. Continuing without dish-first.")
-                dish_enabled = False
-            try:
-                priors_helper = DishIngredientPriors.from_config(dish_cfg.get("priors", {}), ingredient_labels=ingredient_label_list)
-            except Exception as exc:
-                print(f"Failed to initialize priors helper: {exc}. Continuing with uniform priors.")
-                priors_helper = None
+    # Dish-first setup using consolidated processor
+    dish_processor = None
+    try:
+        from food_analyzer.dish_first import create_dish_first_processor
+        dish_processor = create_dish_first_processor(cfg, ingredient_label_list)
+    except Exception as exc:
+        print(f"Dish-first processor unavailable: {exc}. Continuing without dish-first.")
+
+    # Nutrition estimation setup
+    nutrition_estimator = NutritionEstimator(
+        default_portion_grams=float(cfg.get("volume", {}).get("grams_for_full_plate", 350.0)) / 3
+    )
 
     exts = {
         e.lower()
@@ -302,56 +295,19 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
         if not maximize_recall:
             results = ingredient_filter.filter_results(results)
 
-        # Dish-first: compute dish and apply priors-based reweighting (no hard-coded labels)
+        # Dish-first: compute dish and apply priors-based reweighting
         dish_meta: dict | None = None
-        if dish_enabled and dish_classifier is not None:
-            try:
-                from PIL import Image
-                image_obj = Image.open(image_path).convert("RGB")
-                dish_topk = dish_classifier(image_obj)
-                # Optional refinement using observed ingredients to improve dish posterior
-                refine_cfg = dish_cfg.get("refine", {}) if isinstance(dish_cfg.get("refine"), dict) else {}
-                refine_enabled = bool(refine_cfg.get("enabled", True))
-                if dish_topk and refine_enabled:
-                    # Build a dish->ingredient table for refinement if helper exists
-                    priors_table = priors_helper.table if getattr(priors_helper, "table", None) else None
-                    from food_analyzer.dish_first.refine import refine_dish_posterior
-                    dish_topk = refine_dish_posterior(
-                        dish_topk=dish_topk,
-                        detections=results,
-                        priors=priors_table,
-                        ingredient_space=ingredient_label_list,
-                        alpha_like=float(refine_cfg.get("alpha_like", 1.0)),
-                        max_topk=int(refine_cfg.get("max_topk", 5)),
-                    )
-                # Build effective prior over ingredient labels
-                if dish_topk:
-                    # priors_helper may be None -> uniform fallback inside helper
-                    from food_analyzer.dish_first.priors import build_mixture_prior
-                    prior_map = build_mixture_prior(dish_topk, priors_helper, ingredient_label_list)
-                else:
-                    prior_map = {lbl: 1.0 / max(1, len(ingredient_label_list)) for lbl in ingredient_label_list}
-
-                # Reweight and rerank with candidate expansion
-                from food_analyzer.dish_first.reweight import reweight_and_rerank_detections
-                reweight_cfg = dish_cfg.get("reweighting", {}) if isinstance(dish_cfg.get("reweighting"), dict) else {}
-                results = reweight_and_rerank_detections(results, prior_map, reweight_cfg)
-
-                dish_meta = {
-                    "dish_topk": dish_topk,
-                    "reweighting": {
-                        "method": reweight_cfg.get("method", "boost"),
-                        "alpha": reweight_cfg.get("alpha", 0.8),
-                        "temperature": reweight_cfg.get("temperature", 1.0),
-                    },
-                }
-                # Brief console hint for dish-first
-                if dish_topk:
-                    top = dish_topk[0]
-                    print(f"Dish-first: top dish {top.get('label')} @ {float(top.get('confidence', 0.0)):.2f}")
-            except Exception as exc:
-                print(f"Dish-first processing failed for {image_path.name}: {exc}")
-                dish_meta = None
+        if dish_processor is not None:
+            dish_result = dish_processor.process(
+                image=image_path,
+                detections=results,
+                volume_config=cfg.get("volume", {}),
+            )
+            results = dish_result.detections
+            dish_meta = dish_result.metadata if dish_result.dish_topk else None
+            # Log top dish if available
+            if dish_result.dish_topk:
+                print(dish_processor.get_top_dish_info(dish_result))
 
         results.sort(key=lambda item: float(item.get("confidence", 0.0)), reverse=True)
         print(f"\n=== {image_path} ===")
@@ -366,39 +322,9 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
         if not maximize_recall:
             aggregates = ingredient_filter.filter_aggregated_results(aggregates)
 
-        # Optional grams allocation
-        if dish_enabled and dish_meta is not None:
-            try:
-                grams_cfg = dish_cfg.get("grams", {}) if isinstance(dish_cfg.get("grams"), dict) else {}
-                if grams_cfg.get("enabled", False):
-                    from food_analyzer.dish_first.grams import allocate_grams_per_ingredient
-                    # Determine total grams
-                    G = None
-                    total_source = grams_cfg.get("total_source", "fixed")
-                    if total_source == "fixed":
-                        G = float(grams_cfg.get("fixed_total_grams", cfg.get("volume", {}).get("grams_for_full_plate", 350.0)))
-                    elif total_source == "metadata":
-                        G = float(cfg.get("volume", {}).get("grams_for_full_plate", 350.0))
-                    elif total_source == "none":
-                        G = None
-                    else:
-                        G = float(cfg.get("volume", {}).get("grams_for_full_plate", 350.0))
-                    grams_map = allocate_grams_per_ingredient(
-                        detections=results,
-                        total_grams=G,
-                        blend_lambda=float(grams_cfg.get("blend_lambda", 0.3)),
-                        beta=float(grams_cfg.get("area_exponent_beta", 0.5)),
-                        gamma=float(grams_cfg.get("confidence_exponent_gamma", 1.0)),
-                        min_grams=float(grams_cfg.get("min_grams", 0.0)),
-                        rounding=str(grams_cfg.get("rounding", "nearest_gram")),
-                    )
-                    # Inject grams into aggregates
-                    for entry in aggregates:
-                        lbl = str(entry.get("label", "")).strip().lower()
-                        if lbl in grams_map:
-                            entry["grams"] = float(grams_map[lbl])
-            except Exception as exc:
-                print(f"Grams allocation failed for {image_path.name}: {exc}")
+        # Grams are now allocated by DishFirstProcessor if enabled
+        # Enrich aggregates with nutrition data (calories from USDA lookup)
+        aggregates = nutrition_estimator.enrich_aggregates(aggregates)
 
         print("\nAggregated summary:")
         for entry in aggregates:
@@ -406,7 +332,11 @@ def run_inference(target_dir: Path, cfg: dict) -> None:
 
         total_calories = sum(entry["calories"] for entry in aggregates)
         total_grams = sum(entry["grams"] for entry in aggregates)
+        total_protein = sum(entry.get("protein", 0) for entry in aggregates)
+        total_carbs = sum(entry.get("carbs", 0) for entry in aggregates)
+        total_fat = sum(entry.get("fat", 0) for entry in aggregates)
         print(f"\nTotals: {total_grams:.1f}g | {total_calories:.1f} kcal")
+        print(f"Macros: P {total_protein:.1f}g | C {total_carbs:.1f}g | F {total_fat:.1f}g")
 
         # Save visualization assets and results via ResultsWriter
         writer.save_visuals(image_path=image_path, detections=results)

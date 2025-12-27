@@ -1,6 +1,16 @@
 {
   "detector": {
     "backend": "mask_rcnn_deeplabv3",
+    "semantic_food_classes": {
+      "apple": 47,
+      "orange": 48,
+      "banana": 49,
+      "carrot": 50,
+      "hot_dog": 51,
+      "pizza": 52,
+      "donut": 53,
+      "cake": 54
+    },
     "score_threshold": 0.01,
     "iou_threshold": 0.5,
     "max_detections": 100,
@@ -26,7 +36,8 @@
       1.4,
       1.1,
       0.9
-    ]
+    ],
+    "prompts_path": "clip_prompts.json"
   },
   "models": {
     "clip": {
@@ -74,6 +85,12 @@
   },
   "volume": {
     "grams_for_full_plate": 350.0
+  },
+  "nutrition": {
+    "enabled": true,
+    "usda_api_key": null,
+    "cache_path": ".nutrition_cache.json",
+    "default_portion_grams": 100.0
   },
   "depth": {
     "enabled": true

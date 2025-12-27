@@ -49,6 +49,7 @@ class FoodDetector:
         sam_model_type: str | None = None,
         fusion_method: str = "soft_nms",
         soft_nms_sigma: float = 0.5,
+        semantic_food_classes: dict[str, int] | None = None,
     ) -> None:
         self.score_threshold = score_threshold
         self.iou_threshold = iou_threshold
@@ -79,6 +80,14 @@ class FoodDetector:
         self._sam_predictor = None
         self.fusion_method = (fusion_method or "soft_nms").lower()
         self.soft_nms_sigma = float(max(1e-6, soft_nms_sigma))
+        # Configurable semantic food classes (COCO class IDs for DeepLabV3+)
+        # Default: common food classes from COCO
+        self.semantic_food_classes: set[int] = set(
+            (semantic_food_classes or {
+                "apple": 47, "orange": 48, "banana": 49, "carrot": 50,
+                "hot_dog": 51, "pizza": 52, "donut": 53, "cake": 54,
+            }).values()
+        )
         self._has_gpu = self.device.startswith("cuda") and torch.cuda.is_available()
 
         if not self._has_gpu:
@@ -219,36 +228,9 @@ class FoodDetector:
             predictions = torch.softmax(output, dim=1)
             pred_classes = torch.argmax(predictions, dim=1).squeeze().cpu().numpy()
 
-        # Extract food-related classes (COCO classes for food items)
-        # Updated with more specific food classes and reduced non-food items
-        food_classes = {
-            47,  # apple
-            48,  # orange
-            49,  # banana
-            50,  # carrot
-            51,  # hot dog
-            52,  # pizza
-            53,  # donut
-            54,  # cake
-            55,  # chair (excluded)
-            56,  # couch (excluded)
-            57,  # potted plant (excluded)
-            58,  # bed (excluded)
-            59,  # dining table (excluded)
-            60,  # toilet (excluded)
-            61,  # tv (excluded)
-            62,  # laptop (excluded)
-            63,  # mouse (excluded)
-            64,  # remote (excluded)
-            65,  # keyboard (excluded)
-            66,  # cell phone (excluded)
-            67,  # microwave (excluded)
-        }
-        # Refined food-only classes
-        food_classes = {47, 48, 49, 50, 51, 52, 53, 54}
+        # Use configurable food classes (set via constructor or config)
         masks = []
-
-        for food_class in food_classes:
+        for food_class in self.semantic_food_classes:
             mask = (pred_classes == food_class).astype(np.uint8) * 255
             if mask.sum() > 100:  # Filter out very small segments
                 masks.append(mask)
